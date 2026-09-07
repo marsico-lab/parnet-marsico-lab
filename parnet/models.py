@@ -24,6 +24,7 @@ class RBPNet(nn.Module):
         body_layer: nn.Module = ResConvBlock1D,
         head_layer: nn.Module = AdditiveMix,
         embedding_dim: int = 128,
+        use_projection: bool = True,
     ):
         """Initializes RBPNet.
 
@@ -32,6 +33,13 @@ class RBPNet(nn.Module):
             layers (int, optional): Number of body layer, e.g. residual blocks. Defaults to 9.
             dilation (float, optional): Dilation coeff. for convolutions in the body layers. The i'th body layer will have a coeff. of floor(dilation**i). Defaults to 1.75.
             head_layer (nn.Module, optional): Layer to use for the output head. Defaults to LinearProjection.
+            use_projection (bool, optional): Whether to apply the linear projection layer
+                between body and head. When False, the head reads the body's own output
+                directly (identity in place of the projection conv). Previously only
+                achievable by monkey-patching model.projection after construction (see
+                parnet_additional_utils.load_parnet_model's bypass_projection, used for
+                legacy checkpoints predating this layer) -- exposed here as a real
+                constructor/gin argument instead. Defaults to True.
         """
         super().__init__()
 
@@ -43,7 +51,10 @@ class RBPNet(nn.Module):
         self.body = nn.Sequential(*[body_layer(dilation=int(dilation**i)) for i in range(layers)])
 
         # final linear projection layer to produce sequence embeddings
-        self.projection = nn.LazyConv1d(embedding_dim, kernel_size=1, bias=False, padding='same')
+        if use_projection:
+            self.projection = nn.LazyConv1d(embedding_dim, kernel_size=1, bias=False, padding='same')
+        else:
+            self.projection = nn.Identity()
 
         if head_layer is None:
             raise ValueError('head_layer must be specified.')
