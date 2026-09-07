@@ -360,6 +360,9 @@ class NewAdditiveMix(nn.Module):
         target_logprob = target_logit - torch.logsumexp(target_logit, dim=-1, keepdim=True)
         control_logprob = control_logit - torch.logsumexp(control_logit, dim=-1, keepdim=True)
 
+        if self.control_nograd:
+            control_logprob = control_logprob.detach()
+
         # use logsumexp trick to avoid numerical instability
         max_logprob = torch.maximum(target_logprob, control_logprob)
         total_logprob = max_logprob + torch.log(
