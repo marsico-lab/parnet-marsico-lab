@@ -93,13 +93,18 @@ class ResConvBlock1D(nn.Module):
 
 @gin.configurable()
 class LinearProjectionHead(nn.Module):
-    """Performs a pointwise linear projection of the nucleotide-wise embeddings to logits for each task."""
+    """Performs a linear projection of the nucleotide-wise embeddings to logits for each task.
 
-    def __init__(self, num_tasks=None) -> None:
+    With the default kernel_size=1, this is pointwise (each output position depends only on its
+    own input position). A larger kernel_size lets each output position also draw on neighboring
+    positions, matching the original RBPNet ProfileHead's local-window behavior.
+    """
+
+    def __init__(self, num_tasks=None, kernel_size=1) -> None:
         super().__init__()
         if num_tasks is None:
             raise ValueError('num_tasks must be specified')
-        self.pointwise = nn.LazyConv1d(num_tasks, kernel_size=1, bias=False, padding='same')
+        self.pointwise = nn.LazyConv1d(num_tasks, kernel_size=kernel_size, bias=False, padding='same')
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         # (B, hidden_dim, L) --> (B, num_tasks, L)
@@ -110,12 +115,13 @@ class LinearProjectionHead(nn.Module):
 class LinearProjection(nn.Module):
     """Performs a linear projection of the input to the specified number of output channels.
 
-    To be used as an upsampling/downsampling layer.
+    To be used as an upsampling/downsampling layer. See LinearProjectionHead's docstring
+    regarding kernel_size.
     """
 
-    def __init__(self, out_features=128) -> None:
+    def __init__(self, out_features=128, kernel_size=1) -> None:
         super().__init__()
-        self.pointwise_conv = nn.LazyConv1d(out_features, kernel_size=1, bias=False, padding='same')
+        self.pointwise_conv = nn.LazyConv1d(out_features, kernel_size=kernel_size, bias=False, padding='same')
 
     def forward(self, x):
         return self.pointwise_conv(x)
