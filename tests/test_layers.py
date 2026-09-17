@@ -1,6 +1,6 @@
 import torch
 
-from parnet.layers import AdditiveMix, LambdaLayer, NewAdditiveMix
+from parnet.layers import AdditiveMix, LambdaLayer, MixCoeffPenalty, NewAdditiveMix
 
 
 def test_NewAdditiveMix():
@@ -68,3 +68,22 @@ def test_AdditiveMix_max_logprob_handles_double_neg_inf_without_nan():
     # The two ordinary positions should be finite, unaffected by the fix.
     assert torch.isfinite(output['total'][0, 0, 0])
     assert torch.isfinite(output['total'][0, 0, 1])
+
+
+def test_MixCoeffPenalty_default_lambda_anchor_is_a_no_op():
+    # lambda_anchor defaults to 0.0 -- must reproduce the original factor-only behavior
+    # exactly, so no existing checkpoint's training run is affected retroactively.
+    penalty = MixCoeffPenalty(factor=2.0)
+    mix_coeff = torch.tensor([0.0, 0.5, 1.0])
+    assert torch.allclose(penalty(None, None, mix_coeff), mix_coeff * 2.0)
+
+
+def test_MixCoeffPenalty_lambda_anchor_penalizes_saturation_symmetrically():
+    # The anchor term is (mix_coeff - 0.5)**2, scaled by lambda_anchor -- zero at 0.5,
+    # equal and maximal at both mix_coeff=0.0 and mix_coeff=1.0 (symmetric, unlike the
+    # directional `factor` term which only discourages high mix_coeff).
+    penalty = MixCoeffPenalty(factor=0.0, lambda_anchor=1.0)
+    mix_coeff = torch.tensor([0.0, 0.5, 1.0])
+    output = penalty(None, None, mix_coeff)
+    expected = torch.tensor([0.25, 0.0, 0.25])
+    assert torch.allclose(output, expected)

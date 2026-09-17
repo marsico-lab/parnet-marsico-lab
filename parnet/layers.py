@@ -200,19 +200,26 @@ class NewMixCoeffMLP(nn.Module):
 
 @gin.configurable()
 class MixCoeffPenalty(nn.Module):
-    """Simple mixing coefficient penalty that scales the mixing coefficient by a factor.
+    """Mixing coefficient penalty: a directional term plus an optional anti-saturation anchor.
 
-    This encourages the model to use lower the mixing coefficient, i.e. to increase the contribution of the control
-    tack when combining the target and control tracks.
+    `factor` encourages a lower mixing coefficient, i.e. more contribution from the control
+    track -- this is the original, directional penalty, and is a no-op at `factor=0`.
+
+    `lambda_anchor` is a separate, non-directional term: `lambda_anchor * (mix_coeff - 0.5)**2`,
+    always active regardless of `factor`, pulling mix_coeff away from full saturation at 0 or 1
+    in either direction. Added to address mix_coeff collapsing to the extremes even at
+    `factor=0`, observed in head-only fine-tunes with `use_maximum_target_control_logprob=True`
+    (nothing else constrains mix_coeff there). Defaults to 0.0 (no-op, matches prior behavior).
     """
 
-    def __init__(self, factor=1.0) -> None:
+    def __init__(self, factor=1.0, lambda_anchor=0.0) -> None:
         super().__init__()
         self.factor = factor
+        self.lambda_anchor = lambda_anchor
 
     def __call__(self, track_target, track_control, mix_coeff):
         # (B, num_tasks) -> (B, num_tasks)
-        return mix_coeff * self.factor
+        return mix_coeff * self.factor + self.lambda_anchor * (mix_coeff - 0.5) ** 2
 
 
 
