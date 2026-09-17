@@ -274,10 +274,25 @@ class AdditiveMix(nn.Module):
 
         if self.use_maximum_target_control_logprob:
             max_logprob = torch.maximum(target_logprob, control_logprob)
-            total_logprob = max_logprob + torch.log(
-                mix_coeff * torch.exp(target_logprob - max_logprob)
-                + (1 - mix_coeff) * torch.exp(control_logprob - max_logprob)
+            # Guard against -inf - -inf = NaN: this happens when BOTH target_logprob
+            # and control_logprob underflow to exactly -inf at some position (e.g. in
+            # float16, far from a confidently-predicted peak, under a strongly-peaked
+            # distribution -- more likely at high penalty values). The correct limiting
+            # value there is -inf (both probabilities are ~0, so their weighted sum is
+            # too), not NaN. Substitute a finite stand-in only for computing the
+            # (otherwise-unstable) subtraction below, then force the true -inf result
+            # back in afterwards -- every other position is completely unaffected,
+            # since `is_both_neg_inf` is False there and `safe_max` equals `max_logprob`
+            # exactly.
+            is_both_neg_inf = torch.isneginf(max_logprob)
+            safe_max = torch.where(is_both_neg_inf, torch.zeros_like(max_logprob), max_logprob)
+            total_logprob = safe_max + torch.log(
+                mix_coeff * torch.exp(target_logprob - safe_max)
+                + (1 - mix_coeff) * torch.exp(control_logprob - safe_max)
                 + 1e-10  # small constant to avoid numerical issues
+            )
+            total_logprob = torch.where(
+                is_both_neg_inf, torch.full_like(total_logprob, float('-inf')), total_logprob
             )
         else:
             total_logprob = torch.logsumexp(
@@ -291,8 +306,10 @@ class AdditiveMix(nn.Module):
                 dim=0,
             )
 
-        # check for NaN/Inf in total_logprob
-        if torch.isnan(total_logprob).any() or torch.isinf(total_logprob).any():
+        # check for NaN/+Inf in total_logprob. -inf is legitimate here: it means a
+        # position's probability is exactly 0 (e.g. both target and control underflowed
+        # to -inf there). Only NaN and +inf indicate an actual numerical bug.
+        if torch.isnan(total_logprob).any() or torch.isposinf(total_logprob).any():
             print(
                 f'{target_logprob.min()}, {target_logprob.max()}, {target_logprob.mean()}, ',
                 file=sys.stderr,
