@@ -8,11 +8,11 @@ import captum
 
 
 from parnet.utils import sequence_to_onehot
-from parnet.layers import StemConv1D, ResConvBlock1D, AdditiveMix
+from parnet.layers import StemConv1D, ResConvBlock1D, AdditiveMix, _LegacyStateMixin
 
 
 @gin.configurable()
-class RBPNet(nn.Module):
+class RBPNet(_LegacyStateMixin, nn.Module):
     """Implements the RBPNet model as described in Horlacher et al. (2023), DOI: https://doi.org/10.1186/s13059-023-03015-7."""
 
     def __init__(
@@ -99,7 +99,12 @@ class RBPNet(nn.Module):
 
         x = self.stem(sequence)
         x = self.body(x)
-        x = self.projection(x)
+        # `projection` is None when the model has none, which is the case for every
+        # currently released checkpoint. Guarding here keeps the knowledge of whether a
+        # projection exists in the model rather than in a config that could disagree
+        # with the weights.
+        if self.projection is not None:
+            x = self.projection(x)
 
         x = self.head(x)
 

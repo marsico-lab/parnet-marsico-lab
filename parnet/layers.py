@@ -201,6 +201,66 @@ def check_mix_compatibility(mix_layer, required, rule, *, strict=True):
     warnings.warn(msg, UserWarning, stacklevel=3)
 
 
+#: Attributes that were added to layer classes after some released checkpoints were written.
+#: ``torch.load`` on a whole pickled module restores ``__dict__`` without calling
+#: ``__init__``, so an older checkpoint simply lacks them and ``forward`` raises
+#: ``AttributeError`` on the first access. Each default below is the behaviour that was in
+#: force *before* the attribute existed, so filling it in reproduces the checkpoint's
+#: original semantics rather than imposing today's default.
+#:
+#: Three have been hit in practice on released files:
+#:   MixCoeffPenalty.lambda_anchor                      (3M and 7M checkpoints)
+#:   AdditiveMix.use_maximum_target_control_logprob     (released 21M)
+#:   AdditiveMix.control_nograd                         (released 21M)
+_LEGACY_ATTRIBUTE_DEFAULTS = {
+    'AdditiveMix': {
+        # The log-sum branch was the only behaviour before the flag existed.
+        'use_maximum_target_control_logprob': False,
+        # Gradients flowed through the control track before this switch was added.
+        'control_nograd': False,
+    },
+    'NewAdditiveMix': {
+        'control_nograd': False,
+    },
+    'RBPNet': {
+        # Three different representations of "no projection" exist in released files:
+        #   released 21M        attribute ABSENT entirely
+        #   historical 7M       present, value None
+        #   3M backbones        present, value nn.Identity
+        # None is the canonical "there is none"; forward guards on it, so all three behave
+        # identically once this default is filled in.
+        'projection': None,
+    },
+    'MixCoeffPenalty': {
+        # Documented as a no-op default matching prior behaviour.
+        'lambda_anchor': 0.0,
+    },
+    'NewMixCoeffPenalty': {
+        'lambda_anchor': 0.0,
+    },
+}
+
+
+class _LegacyStateMixin:
+    """Fill in attributes added after a checkpoint was pickled.
+
+    Without this, every attribute added to a layer class breaks every checkpoint written
+    before it, and the break surfaces as an ``AttributeError`` from deep inside ``forward``
+    rather than at load time. Callers previously worked around it with an external table of
+    per-model patches; the class itself is the right place for the knowledge.
+    """
+
+    def __setstate__(self, state):
+        if isinstance(state, dict) and 'state' not in state:
+            self.__dict__.update(state)
+        else:  # torch's own (state, slots) form
+            super().__setstate__(state)
+        defaults = _LEGACY_ATTRIBUTE_DEFAULTS.get(type(self).__name__, {})
+        for name, value in defaults.items():
+            if not hasattr(self, name):
+                setattr(self, name, value)
+
+
 @gin.configurable()
 class SequenceLinearMix(nn.Module):
     #: Output range of ``forward``; see :class:`IncompatibleMixError`.
@@ -282,7 +342,7 @@ class NewMixCoeffMLP(nn.Module):
 
 
 @gin.configurable()
-class MixCoeffPenalty(nn.Module):
+class MixCoeffPenalty(_LegacyStateMixin, nn.Module):
     """Mixing coefficient penalty: a directional term plus an optional anti-saturation anchor.
 
     `factor` encourages a lower mixing coefficient, i.e. more contribution from the control
@@ -308,7 +368,7 @@ class MixCoeffPenalty(nn.Module):
 
 
 @gin.configurable()
-class AdditiveMix(nn.Module):
+class AdditiveMix(_LegacyStateMixin, nn.Module):
     """Additive mixing of target and control tracks.
 
     This layer takes a nucleotide-wise embedding, projects it to logits for the target and control tracks for a
@@ -438,7 +498,7 @@ class AdditiveMix(nn.Module):
 
 
 @gin.configurable()
-class NewMixCoeffPenalty(nn.Module):
+class NewMixCoeffPenalty(_LegacyStateMixin, nn.Module):
     def __init__(self, factor=1.0) -> None:
         super().__init__()
         self.factor = factor
@@ -448,7 +508,7 @@ class NewMixCoeffPenalty(nn.Module):
 
 
 @gin.configurable()
-class NewAdditiveMix(nn.Module):
+class NewAdditiveMix(_LegacyStateMixin, nn.Module):
     def __init__(
         self,
         num_tasks,
