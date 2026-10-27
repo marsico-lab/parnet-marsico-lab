@@ -1,7 +1,9 @@
 __version__ = '0.1.1'
 
-# Import torch and additional external configurables
-import gin.torch.external_configurables
+# Register only the external classes parnet actually uses. gin's own
+# gin.torch.external_configurables is deliberately NOT imported: it registers
+# torch.nn wholesale, including the deprecated NLLLoss2d, which emits a
+# FutureWarning on every import of parnet.
 from . import _gin_external_configurables
 
 # add tensor cores support
@@ -15,5 +17,5 @@ from lightning.pytorch import seed_everything
 __seed__ = 42
 seed_everything(__seed__)
 
-from . import constants, models, layers, metrics, losses, data
+from . import models, layers, metrics, losses, data
 from .data import datasets
