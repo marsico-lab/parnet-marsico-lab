@@ -17,7 +17,7 @@ authors = [{ name = "Marc Horlacher", email = "marc.horlacher@gmail.com" }]
 description = "A description of the project."
 
 readme = "README.md"
-requires-python = ">=3.10,<3.11"
+requires-python = ">=3.10"
 license = { file = "LICENSE" }
 
 # Help categorize the project and make it easier for users and tools (such as PyPI and
@@ -31,31 +31,27 @@ classifiers = [
 ]
 
 dependencies = [
-    "biopython >=1.83,<1.85",
-    "click >=8.2,<9.0",
+    "biopython >=1.83",
+    "click >=8.2",
     "datasets >=3.6.0",
     "gin_config>=0.5.0",
     "lightning >=2.3",
-    "lightning-utilities >=0.14,<0.15",
-    "pyarrow >=14.0,<21.0",
-    "pybigwig >=0.3.22,<0.4",
-    "pysam >=0.23.3,<0.24",
-    "pandas >=2.0,<2.4",
-    "numpy >=1.26,<2.0",
-    "sequence-models >=1.8,<2.0",
-    "tensorflow >=2.16,<2.17",
-    "tensorflow-datasets==4.9.3",
+    "pybigwig >=0.3.22",
+    "pysam >=0.23.3",
+    "pandas >=2.0",
+    "numpy >=1.26",
     "torch >=2.5",
-    "tqdm >=4.67.1,<5",
-    "captum >=0.7.0,<0.8",
+    "torchmetrics >=1.0",
+    "tqdm >=4.67.1",
+    "captum >=0.7.0",
 ]
 
 
 [project.optional-dependencies]
 
 gpu = [
-    "tensorflow[and-cuda] >=2.16,<2.17",
     "torch >=2.5",
+    "torchmetrics >=1.0",
 ]
 
 
