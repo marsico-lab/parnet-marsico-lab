@@ -65,7 +65,8 @@ class RBPNet(nn.Module):
         # number of parameters.
         _ = self(torch.zeros(2, 4, 100, dtype=torch.float32))
 
-    def forward(self, sequence: torch.Tensor, to_probs=False) -> dict[str, torch.Tensor]:
+    def forward(self, sequence: torch.Tensor = None, to_probs=False, *, input_ids: torch.Tensor = None,
+                attention_mask: torch.Tensor = None) -> dict[str, torch.Tensor]:
         """Performs a forward pass through the model, returning logits for each postion and task.
 
         Args:
@@ -75,6 +76,27 @@ class RBPNet(nn.Module):
         Returns:
             dict[str, torch.Tensor]: A dictionary logits for total, target, control tracks and the mixing coefficient.
         """
+        if sequence is None and input_ids is None:
+            raise ValueError('pass either a one-hot `sequence` (B, 4, L) or `input_ids` (B, L)')
+        if sequence is not None and input_ids is not None:
+            raise ValueError('pass `sequence` or `input_ids`, not both')
+        if sequence is None:
+            sequence = input_ids
+        # `attention_mask` is accepted for API symmetry with the tokenizer's output and is
+        # deliberately unused: padding is encoded as N, an all-zero column, which already
+        # contributes nothing to any convolution.
+        del attention_mask
+
+        # Accept either the (B, 4, L) float one-hot this model has always taken, or the
+        # (B, L) integer ids produced by parnet.tokenization.RnaTokenizer, so that
+        # `model(**tokenizer(seqs))` works without the caller one-hotting by hand. Ids are
+        # distinguished by rank and dtype, never by value, so a 2-D float tensor is still
+        # rejected downstream rather than silently reinterpreted.
+        if sequence.dim() == 2 and not torch.is_floating_point(sequence):
+            from parnet.tokenization import ids_to_onehot
+
+            sequence = ids_to_onehot(sequence)
+
         x = self.stem(sequence)
         x = self.body(x)
         x = self.projection(x)
