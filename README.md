@@ -154,8 +154,9 @@ projection is part of the learned representation.
 
 `torch` defaults to one thread per core, so several people training at once on one box
 oversubscribe it badly. Measured with four processes on 16 cores: throughput per process
-fell from 47 to 3.8 steps per second, and aggregate throughput fell too. Capping threads
-fixed it, restoring 33.5 steps per second each.
+fell from 47 to 3.9 steps per second, and aggregate throughput fell too. Capping threads
+fixed it, restoring 34.3 steps per second each. Caps of 1, 2 and 4 threads all performed
+the same; 8 dropped to 23.6 and the uncapped 16 to 3.9.
 
 ```python
 import torch
