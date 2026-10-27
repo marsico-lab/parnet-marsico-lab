@@ -3,8 +3,17 @@ import unittest
 
 import torch
 from torch.distributions import Multinomial
-import tensorflow as tf
-import tensorflow_probability as tfp
+
+
+import pytest
+
+# tensorflow and tensorflow_probability are used here only as an independent reference
+# implementation of the multinomial log-probability. Neither has ever been a declared
+# dependency of parnet (tensorflow_probability was never listed at all), so this module
+# could not be collected in a clean environment. Skip rather than fail, and rewrite the
+# reference against scipy or a closed form so the test can actually run.
+tf = pytest.importorskip('tensorflow')
+tfp = pytest.importorskip('tensorflow_probability')
 
 from parnet.losses import MultinomialNLLLossFromLogits, multinomial_nll_loss
 
