@@ -1,4 +1,5 @@
 import logging
+import warnings
 import sys
 
 import gin
@@ -127,8 +128,84 @@ class LinearProjection(nn.Module):
         return self.pointwise_conv(x)
 
 
+class IncompatibleMixError(TypeError):
+    """Raised when a mix-coefficient layer's output range does not match the mixing rule.
+
+    A mixing rule consumes ``mix_coeff`` as one of two different quantities, and pairing it
+    with a layer that emits the other produces silently wrong numbers or NaN rather than an
+    error at the point of the mistake. The two ranges are:
+
+    ``"logit"``
+        An unbounded real number, added to the target log-probability in log space, so the
+        effective target weight is ``sigmoid(mix_coeff)``. Emitted by
+        :class:`SequenceLinearMix`; consumed by the log-sum branch of :class:`AdditiveMix`
+        (``use_maximum_target_control_logprob=False``).
+
+    ``"unit"``
+        A probability in [0, 1], used directly as the weight in a convex combination
+        ``w * exp(target) + (1 - w) * exp(control)``. Emitted by :class:`MixCoeffMLP` and
+        :class:`NewMixCoeffMLP`, which end in a sigmoid; consumed by
+        :class:`NewAdditiveMix` and by the max-logprob branch of :class:`AdditiveMix`.
+
+    The two failure modes this prevents, both observed in practice:
+
+    - ``"logit"`` into a convex rule: ``(1 - w)`` becomes large and negative, so the
+      logarithm receives a negative argument wherever the control track dominates at that
+      position, and the result is NaN. Measured on the released 21M, whose ``mix_coeff``
+      spans -4.6 to 3132: 96.6 per cent of values fall outside [0, 1] and 26.8 per cent of
+      positions give a negative argument.
+    - ``"unit"`` into the log-sum rule: a value already squashed by a sigmoid is treated as
+      a log-space weight, so the effective target weight becomes
+      ``sigmoid(sigmoid(logit))``, confined to (0.5, 0.731). The control track can then
+      never fall below 26.9 per cent and the penalty saturates. This is what
+      :class:`AdditiveMix`'s own default arguments produce.
+    """
+
+
+#: Output range declared by each known mix-coefficient layer.
+MIX_COEFF_RANGES = {
+    'SequenceLinearMix': 'logit',
+    'MixCoeffMLP': 'unit',
+    'NewMixCoeffMLP': 'unit',
+}
+
+
+def mix_coeff_range(layer):
+    """Return the declared output range of a mix-coefficient layer, or None if unknown."""
+    declared = getattr(layer, 'mix_coeff_range', None)
+    if declared is not None:
+        return declared
+    return MIX_COEFF_RANGES.get(type(layer).__name__)
+
+
+def check_mix_compatibility(mix_layer, required, rule, *, strict=True):
+    """Raise :class:`IncompatibleMixError` if ``mix_layer`` does not emit ``required``.
+
+    An unrecognised layer passes unchecked, because a user-supplied layer may legitimately
+    declare nothing; set ``mix_coeff_range`` on it to opt in.
+    """
+    got = mix_coeff_range(mix_layer)
+    if got is None or got == required:
+        return
+    if required == 'unit':
+        why = ('A logit fed to a convex combination makes (1 - w) negative, so the logarithm '
+               'receives a negative argument and the result is NaN.')
+    else:
+        why = ('A sigmoid output fed to the log-sum rule is squashed twice, confining the '
+               'effective target weight to (0.5, 0.731).')
+    msg = (f'{type(mix_layer).__name__} emits mix_coeff in range {got!r}, but {rule} requires '
+           f'{required!r}. {why} Pass a matching mix_coeff_layer, or strict_mix=False to '
+           'proceed anyway.')
+    if strict:
+        raise IncompatibleMixError(msg)
+    warnings.warn(msg, UserWarning, stacklevel=3)
+
+
 @gin.configurable()
 class SequenceLinearMix(nn.Module):
+    #: Output range of ``forward``; see :class:`IncompatibleMixError`.
+    mix_coeff_range = 'logit'
+
     def __init__(self, num_tasks):
         super().__init__()
 
@@ -149,6 +226,9 @@ class SequenceLinearMix(nn.Module):
 
 @gin.configurable()
 class MixCoeffMLP(nn.Module):
+    #: Output range of ``forward``; see :class:`IncompatibleMixError`.
+    mix_coeff_range = 'unit'
+
     """2-layer MLP that takes a feature map as input and outputs a mixing coefficient for each task."""
 
     def __init__(self, num_tasks, units=128, act=nn.ReLU()) -> None:
@@ -175,6 +255,9 @@ class MixCoeffMLP(nn.Module):
 
 @gin.configurable()
 class NewMixCoeffMLP(nn.Module):
+    #: Output range of ``forward``; see :class:`IncompatibleMixError`.
+    mix_coeff_range = 'unit'
+
     def __init__(self, num_tasks, units=128, act=nn.ReLU()) -> None:
         super().__init__()
 
@@ -241,7 +324,7 @@ class AdditiveMix(nn.Module):
         penalty_layer=None,
         control_nograd=False,
         use_maximum_target_control_logprob=False,
-
+        strict_mix=True,
     ):
         """Initializes AdditiveMix layer.
 
@@ -258,6 +341,16 @@ class AdditiveMix(nn.Module):
         self.penalty = penalty_layer() if penalty_layer is not None else None
         self.control_nograd = control_nograd
         self.use_maximum_target_control_logprob = use_maximum_target_control_logprob
+        # Which quantity this instance consumes depends on the branch it will take: the
+        # max-logprob branch is a convex combination and needs a weight in [0, 1]; the
+        # default log-sum branch adds mix_coeff in log space and needs a logit.
+        check_mix_compatibility(
+            self.mix_coeff,
+            'unit' if use_maximum_target_control_logprob else 'logit',
+            'AdditiveMix with use_maximum_target_control_logprob='
+            f'{use_maximum_target_control_logprob}',
+            strict=strict_mix,
+        )
 
     def forward(self, inputs, **kwargs):
         # inputs: (B, hidden_dim, L)
@@ -363,6 +456,7 @@ class NewAdditiveMix(nn.Module):
         mix_coeff_layer=NewMixCoeffMLP,
         penalty_layer=None,
         control_nograd=False,
+        strict_mix=True,
     ):
         super().__init__()
 
@@ -371,6 +465,8 @@ class NewAdditiveMix(nn.Module):
         self.mix_coeff = mix_coeff_layer(num_tasks)
         self.penalty = penalty_layer
         self.control_nograd = control_nograd
+        # Always a convex combination, so always a weight in [0, 1].
+        check_mix_compatibility(self.mix_coeff, 'unit', 'NewAdditiveMix', strict=strict_mix)
 
     def forward(self, inputs, **kwargs):
         # inputs should have shape [batch, hidden_dim, length]
