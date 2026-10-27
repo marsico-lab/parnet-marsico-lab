@@ -17,6 +17,7 @@ from lightning.pytorch import seed_everything
 __seed__ = 42
 seed_everything(__seed__)
 
-from . import models, layers, metrics, losses, data, tokenization
+from . import models, layers, metrics, losses, data, tokenization, finetuning
 from .tokenization import RnaTokenizer, ids_to_onehot
+from .finetuning import set_trainable, stage_names, trainable_stages
 from .data import datasets
