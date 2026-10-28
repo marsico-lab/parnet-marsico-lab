@@ -1,10 +1,50 @@
+# Local hooks on purpose.
+#
+# A pinned `rev:` on ruff-pre-commit makes the hook build its OWN ruff, which then
+# disagrees with the one `pip install -e ".[dev]"` puts in your environment. That is not
+# hypothetical: this file pinned v0.7.1 while pyproject asked for >=0.11, so the hook and
+# the terminal were linting with different ruffs and could reach different verdicts on the
+# same file.
+#
+# `language: system` runs the ruff already installed in the active environment, so there
+# is exactly one version and it cannot drift. The cost is that you must have the dev
+# extra installed; CI installs it too, so CI and the hook agree by construction.
+
 repos:
-- repo: https://github.com/astral-sh/ruff-pre-commit
-  # Ruff version.
-  rev: v0.7.1
-  hooks:
-    # Run the linter.
-    - id: ruff
-      args: [ --fix ]
-    # Run the formatter.
-    - id: ruff-format
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff (lint)
+        entry: ruff check --fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+      - id: ruff-format
+        name: ruff (format)
+        entry: ruff format
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        # Models and datasets are never committed. The repository already carries ~90 MB
+        # of checkpoints from before this rule; this stops it growing.
+        args: [--maxkb=1024]
+      - id: check-merge-conflict
+
+  - repo: https://github.com/executablebooks/mdformat
+    rev: 0.7.19
+    hooks:
+      - id: mdformat
+
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.24.6
+    hooks:
+      - id: typos

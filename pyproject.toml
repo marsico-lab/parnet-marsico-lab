@@ -60,14 +60,13 @@ dev = [
     "pre-commit >=4.0,<5.0",
     # Lint
     "mypy >=1.11,<2.0",
+    # One ruff for everything: .pre-commit-config.yaml runs this same
+    # installed ruff via a local hook, so the hook and the terminal cannot
+    # disagree. Previously the hook pinned v0.7.1 against this >=0.11.
     "ruff >=0.11,<1.0",
     # Tests
     "pytest >=8.4,<9",
     "pytest-cov >=6.0,<7.0",
-    # Docs
-    "mkdocstrings-python >=1.16,<2.0",
-    "mkdocs >=1.6,<2.0",
-    "mkdocs-material >=9.6,<10.0",
 ]
 
 [project.scripts]

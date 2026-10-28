@@ -1,0 +1,7 @@
+# Project vocabulary that is not a typo.
+[default.extend-words]
+# A misspelling baked into the released checkpoints' state dicts. Renaming the attribute
+# would break every pickled model, so the spelling stays and the checker is told so.
+gloabel = "gloabel"
+# Nucleotide and assay abbreviations the dictionary does not know.
+nd = "nd"
