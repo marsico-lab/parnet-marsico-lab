@@ -275,7 +275,12 @@ class SequenceLinearMix(nn.Module):
     def forward(self, inputs):
         # inputs should have shape [batch, hidden_dim, length]
 
-        x = torch.squeeze(self.gloabel_avg_pool(inputs))  # --> [batch, hidden_dim]
+        # squeeze the pooled length axis ONLY. A bare torch.squeeze() drops every size-1
+        # dimension, which at batch size 1 removes the batch axis too and returns
+        # mix_coeff with shape (num_tasks,) instead of (1, num_tasks). The totals were
+        # unaffected because the later unsqueeze broadcast correctly either way, so this
+        # surfaced only as an indexing error in caller code.
+        x = torch.squeeze(self.gloabel_avg_pool(inputs), dim=-1)  # --> [batch, hidden_dim]
         logging.debug(f'x=torch.squeeze(self.gloabel_avg_pool(inputs)): {x.shape}')
 
         x = self.dense(x)  # --> [batch, num_tasks]

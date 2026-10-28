@@ -7,6 +7,7 @@ Both are reproduced here as the thing that must raise.
 import pytest
 import torch
 
+from parnet import layers
 from parnet.layers import (
     AdditiveMix,
     IncompatibleMixError,
@@ -112,3 +113,46 @@ def test_user_layer_can_opt_in_and_then_is_checked():
 
 def test_check_helper_is_a_no_op_when_ranges_agree():
     check_mix_compatibility(MixCoeffMLP(N), "unit", "test rule")
+
+
+def test_mix_coeff_keeps_the_batch_axis_at_batch_size_one():
+    """SequenceLinearMix used a bare torch.squeeze, which drops the batch axis when B=1.
+
+    The predicted tracks were unaffected because the subsequent unsqueeze broadcast
+    correctly either way, so this surfaced only as `IndexError: too many indices` in
+    caller code that did out['mix_coeff'][0, task]. Shapes must not depend on batch size.
+    """
+    head = layers.AdditiveMix(
+        num_tasks=5,
+        mix_coeff_layer=layers.SequenceLinearMix,
+        use_maximum_target_control_logprob=False,
+    )
+    head(torch.randn(2, 8, 16))  # materialise lazy parameters
+    head.eval()
+
+    with torch.no_grad():
+        single = head(torch.randn(1, 8, 16))
+        batched = head(torch.randn(3, 8, 16))
+
+    assert single['mix_coeff'].shape == (1, 5), single['mix_coeff'].shape
+    assert batched['mix_coeff'].shape == (3, 5), batched['mix_coeff'].shape
+    assert single['total'].shape == (1, 5, 16)
+
+
+def test_batching_does_not_change_predictions():
+    """A window predicted alone and inside a batch must give the same answer."""
+    head = layers.AdditiveMix(
+        num_tasks=3,
+        mix_coeff_layer=layers.SequenceLinearMix,
+        use_maximum_target_control_logprob=False,
+    )
+    head(torch.randn(2, 8, 16))
+    head.eval()
+
+    torch.manual_seed(1)
+    x = torch.randn(4, 8, 16)
+    with torch.no_grad():
+        alone = head(x[:1])
+        together = head(x)
+    assert torch.allclose(alone['total'], together['total'][:1], atol=1e-6)
+    assert torch.allclose(alone['mix_coeff'], together['mix_coeff'][:1], atol=1e-6)
