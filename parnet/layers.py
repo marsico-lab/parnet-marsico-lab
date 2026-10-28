@@ -261,6 +261,42 @@ class _LegacyStateMixin:
                 setattr(self, name, value)
 
 
+def mix_coeff_to_target_weight(mix_coeff, mix_layer):
+    """Convert a mixing layer's raw output into the target weight w in [0, 1].
+
+    w is the quantity with a meaning: the share of the prediction carried by the target
+    track. Whether a layer's output already IS w depends on its ``mix_coeff_range``. A
+    ``'unit'`` layer ends in a sigmoid and emits w directly; a ``'logit'`` layer emits an
+    unbounded score whose target weight is its sigmoid.
+
+    Callers have been doing this by hand and getting it wrong in both directions: applying
+    a sigmoid to an already-bounded 7M coefficient, which compresses every value toward
+    0.5, and omitting it for the 21M. Doing it once, from the layer's own declared range,
+    removes the choice.
+
+    Returns ``None`` when the layer declares no range, which is the case for a
+    hand-injected stand-in such as :class:`LambdaLayer`. Only the penalty genuinely needs
+    w, and it raises on ``None``; everything else carries on.
+    """
+    range_ = getattr(type(mix_layer), 'mix_coeff_range', None)
+    if range_ == 'unit':
+        return mix_coeff
+    if range_ == 'logit':
+        return torch.sigmoid(mix_coeff)
+    return None
+
+
+def _require_target_weight(target_weight, mix_layer):
+    """Return *target_weight*, or explain why it could not be derived."""
+    if target_weight is None:
+        raise IncompatibleMixError(
+            f'{type(mix_layer).__name__} declares no mix_coeff_range, so its output '
+            'cannot be interpreted as a target weight, and the penalty acts on the '
+            'target weight. Set mix_coeff_range to "unit" or "logit" on the layer.'
+        )
+    return target_weight
+
+
 @gin.configurable()
 class SequenceLinearMix(nn.Module):
     #: Output range of ``forward``; see :class:`IncompatibleMixError`.
@@ -430,6 +466,7 @@ class AdditiveMix(_LegacyStateMixin, nn.Module):
         # (B, hidden_dim, L) -> (B, num_tasks, 1)
         mix_coeff = self.mix_coeff(inputs)
         mix_coeff = torch.unsqueeze(mix_coeff, dim=-1)
+        target_weight = mix_coeff_to_target_weight(mix_coeff, self.mix_coeff)
         logging.debug(f'{mix_coeff.shape=}')
 
         # Additive mixing of target and control tracks, weighted by the mixing coefficient. The logsumexp trick
@@ -492,12 +529,24 @@ class AdditiveMix(_LegacyStateMixin, nn.Module):
             'target': target_logprob,  # (B, num_tasks, L)
             'control': control_logprob,  # (B, num_tasks, L)
             'total': total_logprob,  # (B, num_tasks, L)
-            'mix_coeff': mix_coeff.squeeze(-1),  # (B, num_tasks)
+            'mix_coeff': mix_coeff.squeeze(-1),
+            **({'target_weight': target_weight.squeeze(-1)} if target_weight is not None else {}),  # (B, num_tasks)
         }
 
         if self.penalty is not None:
             # add penalty loss (used only during training)
-            return_dict['penalty_loss'] = self.penalty(target_logprob, control_logprob, mix_coeff)
+            # The penalty acts on the TARGET WEIGHT, not on the raw layer output. For a
+            # 'logit' layer the two are different objectives: penalising the logit is
+            # unbounded below with a constant gradient, so it never stops pushing w
+            # toward 0, while penalising w is bounded in [0, factor] with gradient
+            # factor*w*(1-w), which vanishes once the control track dominates. Both
+            # released families were trained against w. Penalising the logit arrived
+            # with commit 0e247a9 and is the likely cause of w collapsing in epoch 0.
+            return_dict['penalty_loss'] = self.penalty(
+                target_logprob,
+                control_logprob,
+                _require_target_weight(target_weight, self.mix_coeff),
+            )
 
         return return_dict
 
@@ -543,6 +592,7 @@ class NewAdditiveMix(_LegacyStateMixin, nn.Module):
         # compute mixing coefficients --> [batch, num_tasks]
         mix_coeff = self.mix_coeff(inputs)
         mix_coeff = torch.unsqueeze(mix_coeff, dim=-1)
+        target_weight = mix_coeff_to_target_weight(mix_coeff, self.mix_coeff)
 
         logging.debug(f'mix_coeff.shape: {mix_coeff.shape}')
 
@@ -565,10 +615,22 @@ class NewAdditiveMix(_LegacyStateMixin, nn.Module):
             'target': target_logprob,
             'control': control_logprob,
             'total': total_logprob,
-            'mix_coeff': mix_coeff.squeeze(-1),  # TODO: Add this.
+            'mix_coeff': mix_coeff.squeeze(-1),
+            **({'target_weight': target_weight.squeeze(-1)} if target_weight is not None else {}),  # TODO: Add this.
         }
 
         if self.penalty is not None:
-            return_dict['penalty_loss'] = self.penalty(target_logprob, control_logprob, mix_coeff)
+            # The penalty acts on the TARGET WEIGHT, not on the raw layer output. For a
+            # 'logit' layer the two are different objectives: penalising the logit is
+            # unbounded below with a constant gradient, so it never stops pushing w
+            # toward 0, while penalising w is bounded in [0, factor] with gradient
+            # factor*w*(1-w), which vanishes once the control track dominates. Both
+            # released families were trained against w. Penalising the logit arrived
+            # with commit 0e247a9 and is the likely cause of w collapsing in epoch 0.
+            return_dict['penalty_loss'] = self.penalty(
+                target_logprob,
+                control_logprob,
+                _require_target_weight(target_weight, self.mix_coeff),
+            )
 
         return return_dict

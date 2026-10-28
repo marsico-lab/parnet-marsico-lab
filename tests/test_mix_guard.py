@@ -4,6 +4,7 @@ The guard exists because two specific pairings produce wrong numbers rather than
 Both are reproduced here as the thing that must raise.
 """
 
+import functools
 import pytest
 import torch
 
@@ -156,3 +157,98 @@ def test_batching_does_not_change_predictions():
         together = head(x)
     assert torch.allclose(alone['total'], together['total'][:1], atol=1e-6)
     assert torch.allclose(alone['mix_coeff'], together['mix_coeff'][:1], atol=1e-6)
+
+
+# --- the penalty acts on the target weight, not the raw layer output -----------------
+
+def _head(mix_layer, use_max, factor=5.0, num_tasks=2):
+    return layers.AdditiveMix(
+        num_tasks=num_tasks,
+        mix_coeff_layer=mix_layer,
+        use_maximum_target_control_logprob=use_max,
+        penalty_layer=functools.partial(layers.MixCoeffPenalty, factor=factor),
+    )
+
+
+def test_penalty_on_a_logit_head_sees_the_sigmoid_not_the_logit():
+    """Regression for commit 0e247a9.
+
+    SequenceLinearMix emits an unbounded logit. Penalising it directly is unbounded below
+    with a constant gradient, so it never stops pushing w toward 0. Penalising w is
+    bounded in [0, factor]. Both released families were trained against w.
+    """
+    torch.manual_seed(0)
+    head = _head(layers.SequenceLinearMix, use_max=False, factor=5.0)
+    x = torch.randn(4, 16, 32)
+    head(x)
+    head.eval()
+
+    with torch.no_grad():
+        out = head(x)
+
+    w = torch.sigmoid(out['mix_coeff'])
+    assert torch.allclose(out['target_weight'], w, atol=0), 'target_weight must be sigmoid(logit) here'
+
+    penalty = out['penalty_loss']
+    assert (penalty >= 0).all(), 'penalising w cannot go negative'
+    assert (penalty <= 5.0).all(), 'penalising w is bounded by the factor'
+    assert torch.allclose(penalty.squeeze(-1), w * 5.0, atol=1e-6)
+
+
+def test_penalty_on_a_unit_head_sees_the_coefficient_unchanged():
+    """MixCoeffMLP already ends in a sigmoid, so its output IS w and must not be squashed again."""
+    torch.manual_seed(0)
+    head = _head(layers.MixCoeffMLP, use_max=True, factor=3.0)
+    x = torch.randn(4, 16, 32)
+    head(x)
+    head.eval()
+    with torch.no_grad():
+        out = head(x)
+
+    assert torch.equal(out['target_weight'], out['mix_coeff'])
+    assert torch.allclose(out['penalty_loss'].squeeze(-1), out['mix_coeff'] * 3.0, atol=1e-6)
+
+
+def test_penalty_gradient_vanishes_as_the_control_track_takes_over():
+    """The property that makes the historical penalty self-limiting.
+
+    d/dm [sigmoid(m) * factor] = factor * w * (1 - w), which goes to 0 as w goes to 0.
+    Penalising the logit instead gives a constant gradient of `factor` everywhere, so it
+    keeps pushing without limit. This pins the self-limiting behaviour.
+    """
+    factor = 5.0
+    gradients = []
+    for logit in (-12.0, -6.0, 0.0):
+        m = torch.tensor(logit, requires_grad=True)
+        penalty = torch.sigmoid(m) * factor
+        (grad,) = torch.autograd.grad(penalty, m)
+        gradients.append(grad.item())
+
+    assert gradients[0] < gradients[1] < gradients[2], 'gradient must shrink as w shrinks'
+    assert gradients[0] < 1e-3, 'gradient must essentially vanish deep in the control regime'
+    assert abs(gradients[2] - factor / 4) < 1e-6, 'gradient peaks at factor/4 when w = 0.5'
+
+
+def test_penalty_requires_a_declared_range():
+    """A hand-injected mix layer with no declared range cannot define a target weight."""
+    head = _head(layers.SequenceLinearMix, use_max=False)
+    x = torch.randn(2, 16, 32)
+    head(x)
+    head.mix_coeff = layers.LambdaLayer(lambda _: torch.zeros(2, 2))
+    with pytest.raises(layers.IncompatibleMixError, match='declares no mix_coeff_range'):
+        head(x)
+
+
+def test_no_declared_range_without_a_penalty_still_works():
+    """Injecting a fixed coefficient is a legitimate thing to do in a test or a demo."""
+    head = layers.AdditiveMix(
+        num_tasks=2,
+        mix_coeff_layer=layers.SequenceLinearMix,
+        use_maximum_target_control_logprob=False,
+    )
+    x = torch.randn(2, 16, 32)
+    head(x)
+    head.mix_coeff = layers.LambdaLayer(lambda _: torch.zeros(2, 2))
+    out = head(x)
+    assert 'penalty_loss' not in out
+    assert 'target_weight' not in out, 'w is not derivable here, so it must not be invented'
