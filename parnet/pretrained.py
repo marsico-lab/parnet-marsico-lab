@@ -26,8 +26,10 @@ import pathlib
 from typing import Any
 
 import torch.nn as nn
+from pydantic import ValidationError
 
 from parnet import layers as _layers
+from parnet.config import ModelConfig
 
 #: Classes that may be named in a ``config.json``. Resolution goes through this table and
 #: never through ``getattr`` on a module, so a config file cannot cause an arbitrary
@@ -339,8 +341,18 @@ def from_pretrained(stem: str | pathlib.Path, *, map_location='cpu', strict: boo
         if not path.exists():
             raise FileNotFoundError(f'{path} not found. from_pretrained() takes a stem, not a filename.')
 
-    config = json.loads(config_path.read_text())
-    arch = dict(config['architecture'])
+    raw = json.loads(config_path.read_text())
+    # Validate before building anything. The architecture block is checked strictly, so a
+    # misspelled key fails here instead of being dropped and leaving the builder to fall
+    # back on a default that is not what was trained. That failure mode is not
+    # hypothetical: configs that omitted the activations loaded cleanly with strict=True
+    # and computed something else.
+    try:
+        parsed = ModelConfig.model_validate(raw)
+    except ValidationError as error:
+        raise ConfigWeightMismatch(f'{config_path} is not a valid parnet config.\n{error}') from error
+    config = raw
+    arch = parsed.architecture.model_dump(by_alias=True)
     state = load_file(str(weights_path), device=map_location)
 
     weights_say = state_dict_has_projection(state)

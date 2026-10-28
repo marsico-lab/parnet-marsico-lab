@@ -47,6 +47,9 @@ dependencies = [
     # The on-disk model format. parnet.pretrained imports it on every
     # save_pretrained/from_pretrained, so it is a core dependency, not an extra.
     "safetensors >=0.4",
+    # Schema for config.json. Strict validation of the architecture block is
+    # what makes a typo fail at load instead of silently changing the model.
+    "pydantic >=2.0",
 ]
 
 
