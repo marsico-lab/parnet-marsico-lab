@@ -10,7 +10,6 @@ import torch
 
 from parnet.tokenization import (
     N_CHANNELS,
-    PAD_INDEX,
     RnaTokenizer,
     TokenizationError,
     ids_to_onehot,
@@ -81,19 +80,24 @@ def test_batch_of_equal_length_has_no_attention_mask(tok):
     assert 'attention_mask' not in out  # absence means every position is real
 
 
-def test_unequal_lengths_are_padded_with_n(tok):
-    out = tok(['ACGT', 'AC'])
-    assert out['input_ids'].shape == (2, 4)
-    assert out['input_ids'][1].tolist() == [0, 1, PAD_INDEX, PAD_INDEX]
-    assert out['attention_mask'][1].tolist() == [1, 1, 0, 0]
-    # padding must be inert in the model's input space
-    oh = ids_to_onehot(out['input_ids'])
-    assert oh[1, :, 2:].sum().item() == 0.0
-
-
-def test_padding_can_be_refused(tok):
+def test_unequal_lengths_are_refused(tok):
+    """The tokenizer does not pad; padding is parnet.padding's job and must be asked for."""
     with pytest.raises(TokenizationError, match='different lengths'):
-        tok(['ACGT', 'AC'], padding=False)
+        tok(['ACGT', 'AC'])
+
+
+def test_ragged_output_is_available_without_padding(tok):
+    out = tok(['ACGT', 'AC'], batched=False)
+    assert [t.shape[0] for t in out['input_ids']] == [4, 2]
+    assert 'attention_mask' not in out
+
+
+def test_equal_lengths_still_stack(tok):
+    out = tok(['ACGT', 'UGCA'])
+    assert out['input_ids'].shape == (2, 4)
+    oh = ids_to_onehot(out['input_ids'])
+    assert oh.shape == (2, 4, 4)
+    assert float(oh.sum()) == 8.0, 'every position is a real base'
 
 
 def test_single_string_is_accepted(tok):

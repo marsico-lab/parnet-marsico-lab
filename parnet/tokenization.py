@@ -110,20 +110,25 @@ class RnaTokenizer:
         sequences: str | list[str],
         *,
         return_tensors: str | None = 'pt',
-        padding: bool = True,
-    ) -> dict[str, torch.Tensor | list[list[int]]]:
+        batched: bool = True,
+    ) -> dict[str, torch.Tensor | list]:
         """Encode one or more sequences.
+
+        This tokenizer does not pad. Where a short sequence sits inside a window is a
+        modelling choice, not a tokenization detail, and in a position-sensitive model it
+        moves every prediction; see :func:`parnet.padding.pad_sequences`.
 
         Args:
             sequences: A single sequence or a list of them.
-            return_tensors: ``"pt"`` for a ``torch.long`` tensor, ``None`` for lists.
-            padding: Pad short sequences to the longest in the batch, using ``N``
-                (an all-zero column). Only meaningful with ``return_tensors="pt"``.
+            return_tensors: ``"pt"`` for ``torch.long`` tensors, ``None`` for plain lists.
+            batched: ``True`` stacks the sequences into one ``(B, L)`` tensor and requires
+                them to be the same length. ``False`` returns a list of 1-D tensors, one
+                per sequence, leaving ragged input ragged.
 
         Returns:
-            ``{"input_ids": ..., "attention_mask": ...}``. ``attention_mask`` is 1 for
-            real positions and 0 for padding, and is returned only when padding was
-            applied, so its absence means every position is real.
+            ``{"input_ids": ...}`` — a ``(B, L)`` tensor when ``batched``, otherwise a
+            list of 1-D tensors. No ``attention_mask``: nothing here invents positions, so
+            every position returned is real.
         """
         if isinstance(sequences, str):
             sequences = [sequences]
@@ -137,21 +142,18 @@ class RnaTokenizer:
         if return_tensors != 'pt':
             raise TokenizationError(f"return_tensors must be 'pt' or None, got {return_tensors!r}")
 
+        if not batched:
+            return {'input_ids': [torch.tensor(x, dtype=torch.long) for x in ids]}
+
         lengths = {len(x) for x in ids}
-        if len(lengths) > 1 and not padding:
-            raise TokenizationError(f'sequences have different lengths {sorted(lengths)} and padding=False')
-
-        out: dict[str, torch.Tensor] = {}
-        if len(lengths) == 1:
-            out['input_ids'] = torch.tensor(ids, dtype=torch.long)
-            return out
-
-        longest = max(lengths)
-        padded = [x + [PAD_INDEX] * (longest - len(x)) for x in ids]
-        mask = [[1] * len(x) + [0] * (longest - len(x)) for x in ids]
-        out['input_ids'] = torch.tensor(padded, dtype=torch.long)
-        out['attention_mask'] = torch.tensor(mask, dtype=torch.long)
-        return out
+        if len(lengths) > 1:
+            raise TokenizationError(
+                f'sequences have different lengths {sorted(lengths)} and batched=True. '
+                'Either pass batched=False to get a list of 1-D tensors, or pad them '
+                'yourself with parnet.padding.pad_sequences, which makes you say on which '
+                'side the padding goes.'
+            )
+        return {'input_ids': torch.tensor(ids, dtype=torch.long)}
 
 
 def ids_to_onehot(input_ids: torch.Tensor) -> torch.Tensor:
