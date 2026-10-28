@@ -158,3 +158,98 @@ def test_mix_coeff_range_survives_the_round_trip(tmp_path):
     assert config['architecture']['use_maximum_target_control_logprob'] is False
     reloaded = from_pretrained(tmp_path / 'tiny')
     assert type(reloaded.head.mix_coeff).__name__ == 'SequenceLinearMix'
+
+
+def test_body_width_is_recorded_and_restored(tmp_path):
+    """A model wider than the default stem must come back at its trained width.
+
+    Regression test: the first version of build_from_config ignored the stem's filter
+    count, so every model was rebuilt at the default 128 channels and a 768-channel
+    checkpoint failed to load with a wall of size mismatches.
+    """
+    model = RBPNet(
+        num_tasks=2,
+        layers=2,
+        embedding_dim=16,
+        use_projection=False,
+        stem_layer=functools.partial(layers.StemConv1D, filters=48),
+        body_layer=functools.partial(layers.ResConvBlock1D, filters=48),
+        head_layer=functools.partial(
+            layers.AdditiveMix,
+            mix_coeff_layer=layers.MixCoeffMLP,
+            use_maximum_target_control_logprob=True,
+        ),
+    )
+    model.eval()
+    x = torch.rand(2, 4, 64)
+    with torch.no_grad():
+        before = model(x)
+
+    save_pretrained(model, tmp_path / 'wide')
+    config = json.loads((tmp_path / 'wide.config.json').read_text())
+    assert config['architecture']['body_width'] == 48
+
+    reloaded = from_pretrained(tmp_path / 'wide')
+    assert reloaded.stem.conv1d.weight.shape[0] == 48
+    assert all(block.conv1d.weight.shape[0] == 48 for block in reloaded.body)
+    with torch.no_grad():
+        after = reloaded(x)
+    for key in before:
+        assert torch.equal(before[key], after[key])
+
+
+def test_non_parametric_architecture_survives_the_round_trip(tmp_path):
+    """Activations, kernel sizes and dilations are not in the state dict.
+
+    Regression test for a real defect: the 3M backbones were trained with GELU, the
+    config did not record it, and the rebuilt model used the default ReLU. Weights loaded
+    cleanly with strict=True and the model computed something different, which only
+    surfaced because the export stored reference outputs.
+    """
+    model = RBPNet(
+        num_tasks=2,
+        layers=3,
+        embedding_dim=16,
+        use_projection=False,
+        stem_layer=functools.partial(layers.StemConv1D, filters=24, activation=torch.nn.GELU()),
+        body_layer=functools.partial(layers.ResConvBlock1D, filters=24, activation=torch.nn.GELU()),
+        head_layer=functools.partial(
+            layers.AdditiveMix,
+            mix_coeff_layer=functools.partial(
+                layers.MixCoeffMLP, units=32, act=torch.nn.GELU()
+            ),
+            use_maximum_target_control_logprob=True,
+        ),
+    )
+    model.eval()
+    x = torch.rand(2, 4, 64)
+    with torch.no_grad():
+        before = model(x)
+
+    save_pretrained(model, tmp_path / 'gelu')
+    config = json.loads((tmp_path / 'gelu.config.json').read_text())['architecture']
+    assert config['stem']['activation'] == 'GELU'
+    assert config['body']['activation'] == 'GELU'
+    assert config['mix_coeff_activation'] == 'GELU'
+    assert config['mix_coeff_units'] == 32
+    assert config['body']['dilations'] == [1, 1, 3]
+
+    reloaded = from_pretrained(tmp_path / 'gelu')
+    assert type(reloaded.stem.act).__name__ == 'GELU'
+    assert type(reloaded.body[0].act).__name__ == 'GELU'
+    assert type(reloaded.head.mix_coeff.act).__name__ == 'GELU'
+    with torch.no_grad():
+        after = reloaded(x)
+    for key in before:
+        assert torch.equal(before[key], after[key]), f'{key} differs after round trip'
+
+
+def test_unknown_activation_is_rejected(tmp_path):
+    model = _small_model()
+    save_pretrained(model, tmp_path / 'tiny')
+    path = tmp_path / 'tiny.config.json'
+    config = json.loads(path.read_text())
+    config['architecture']['body']['activation'] = 'os.system'
+    path.write_text(json.dumps(config))
+    with pytest.raises(KeyError, match='not a registered activation'):
+        from_pretrained(tmp_path / 'tiny')

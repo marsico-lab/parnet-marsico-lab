@@ -47,12 +47,40 @@ CLASS_REGISTRY: dict[str, type] = {
     'NewAdditiveMix': _layers.NewAdditiveMix,
 }
 
+#: Activation classes that may be named in a config. Activations are NOT parameters, so
+#: ``load_state_dict`` restores weights perfectly while silently leaving the wrong
+#: activation in place. That exact defect invalidated an earlier batch of 7M results and
+#: made the first 3M export fail to reproduce its own reference outputs, so every
+#: activation is recorded and restored explicitly.
+ACTIVATION_REGISTRY: dict[str, type] = {
+    'ReLU': nn.ReLU,
+    'GELU': nn.GELU,
+    'SiLU': nn.SiLU,
+    'ELU': nn.ELU,
+    'LeakyReLU': nn.LeakyReLU,
+    'Tanh': nn.Tanh,
+    'Sigmoid': nn.Sigmoid,
+    'Identity': nn.Identity,
+}
+
 CONFIG_SUFFIX = '.config.json'
 WEIGHTS_SUFFIX = '.safetensors'
 
 
 class ConfigWeightMismatch(ValueError):
     """Raised when ``config.json`` claims something the weights contradict."""
+
+
+def _resolve_activation(name: str | None) -> nn.Module | None:
+    if name is None:
+        return None
+    try:
+        return ACTIVATION_REGISTRY[name]()
+    except KeyError:
+        raise KeyError(
+            f'{name!r} is not a registered activation. Known: {sorted(ACTIVATION_REGISTRY)}. '
+            'Add it to parnet.pretrained.ACTIVATION_REGISTRY if it is genuinely used.'
+        ) from None
 
 
 def _resolve(name: str | None) -> type | None:
@@ -113,8 +141,31 @@ def describe(model: nn.Module) -> dict[str, Any]:
     arch: dict[str, Any] = {
         'class': type(model).__name__,
         'n_body_blocks': len(model.body),
+        # Width of the residual stream, set by the stem's filter count. Distinct from
+        # embedding_dim: with no projection the head sees this width directly, with a
+        # projection it sees the projection's output instead. Both are needed to rebuild.
+        'body_width': int(model.stem.conv1d.weight.shape[0]),
         'embedding_dim': int(conv.weight.shape[1]),
         'use_projection': has_projection,
+        # Everything below is non-parametric: it does not appear in the state dict, so a
+        # config that omits it produces a model that loads cleanly and computes something
+        # different. Recorded explicitly for that reason.
+        'stem': {
+            'class': type(model.stem).__name__,
+            'kernel_size': int(model.stem.conv1d.kernel_size[0]),
+            'activation': type(model.stem.act).__name__,
+            'dropout': float(model.stem.dropout.p) if model.stem.dropout is not None else None,
+        },
+        'body': {
+            'class': type(model.body[0]).__name__,
+            'kernel_size': int(model.body[0].conv1d.kernel_size[0]),
+            'activation': type(model.body[0].act).__name__,
+            'dropout': float(model.body[0].dropout.p) if model.body[0].dropout is not None else None,
+            'residual': bool(model.body[0].residual),
+            'dilations': [int(block.conv1d.dilation[0]) for block in model.body],
+        },
+        'mix_coeff_units': int(mix.dense1.weight.shape[0]) if hasattr(mix, 'dense1') else None,
+        'mix_coeff_activation': type(mix.act).__name__ if hasattr(mix, 'act') else None,
         'head_class': type(head).__name__,
         'mix_coeff_class': type(mix).__name__,
         'mix_coeff_range': getattr(type(mix), 'mix_coeff_range', None),
@@ -197,9 +248,18 @@ def build_from_config(arch: dict[str, Any]):
             penalty_kwargs['lambda_anchor'] = arch['lambda_anchor']
         penalty_layer = functools.partial(penalty_cls, **penalty_kwargs)
 
+    # MixCoeffMLP / NewMixCoeffMLP carry their own width and activation, neither of which
+    # is a parameter of the saved state dict.
+    mix_kwargs: dict[str, Any] = {}
+    if arch.get('mix_coeff_units') is not None:
+        mix_kwargs['units'] = arch['mix_coeff_units']
+    if arch.get('mix_coeff_activation') is not None:
+        mix_kwargs['act'] = _resolve_activation(arch['mix_coeff_activation'])
+    mix_layer = functools.partial(mix_cls, **mix_kwargs) if mix_kwargs else mix_cls
+
     head_kwargs: dict[str, Any] = {
         'head_layer': head_layer_cls,
-        'mix_coeff_layer': mix_cls,
+        'mix_coeff_layer': mix_layer,
         'penalty_layer': penalty_layer,
         'control_nograd': arch.get('control_nograd', False),
     }
@@ -208,13 +268,70 @@ def build_from_config(arch: dict[str, Any]):
             'use_maximum_target_control_logprob', False
         )
 
-    return RBPNet(
+    # The stem's filter count sets the width of the whole residual stream, so it has to be
+    # rebuilt at the trained width. Configs written before body_width existed fall back to
+    # embedding_dim, which equals the body width exactly when there is no projection.
+    body_width = arch.get('body_width')
+    if body_width is None:
+        if arch['use_projection']:
+            raise KeyError(
+                "config has no 'body_width' and use_projection is true, so the body width "
+                'cannot be inferred from embedding_dim. Re-export this model.'
+            )
+        body_width = arch.get('embedding_dim') or 128
+
+    stem_spec = arch.get('stem') or {}
+    body_spec = arch.get('body') or {}
+
+    stem_kwargs: dict[str, Any] = {'filters': body_width}
+    if 'kernel_size' in stem_spec:
+        stem_kwargs['kernel_size'] = stem_spec['kernel_size']
+    if 'activation' in stem_spec:
+        stem_kwargs['activation'] = _resolve_activation(stem_spec['activation'])
+    if 'dropout' in stem_spec:
+        stem_kwargs['dropout'] = stem_spec['dropout']
+
+    body_kwargs: dict[str, Any] = {'filters': body_width}
+    for key in ('kernel_size', 'dropout', 'residual'):
+        if key in body_spec:
+            body_kwargs[key] = body_spec[key]
+    if 'activation' in body_spec:
+        body_kwargs['activation'] = _resolve_activation(body_spec['activation'])
+
+    # RBPNet computes each block's dilation as int(dilation ** i). When the config records
+    # the trained dilations, honour them exactly instead, so a model trained with a
+    # different schedule is rebuilt correctly rather than approximately.
+    dilations = body_spec.get('dilations')
+    if dilations:
+        schedule = list(dilations)
+
+        def body_layer(dilation=None, _schedule=schedule, _calls=[]):  # noqa: B006
+            index = len(_calls)
+            _calls.append(index)
+            return _layers.ResConvBlock1D(dilation=_schedule[index], **body_kwargs)
+    else:
+        body_layer = functools.partial(_layers.ResConvBlock1D, **body_kwargs)
+
+    model = RBPNet(
         num_tasks=arch['n_tasks'],
         layers=arch['n_body_blocks'],
+        # Both the stem and every residual block must be built at the trained width: the
+        # block adds its conv output to its own input, so a mismatch is a shape error in
+        # the residual add rather than a load error.
+        stem_layer=functools.partial(_layers.StemConv1D, **stem_kwargs),
+        body_layer=body_layer,
         head_layer=functools.partial(head_cls, **head_kwargs),
         embedding_dim=arch.get('embedding_dim') or 128,
         use_projection=arch['use_projection'],
     )
+
+    if dilations:
+        built = [int(block.conv1d.dilation[0]) for block in model.body]
+        if built != list(dilations):
+            raise ConfigWeightMismatch(
+                f'config records dilations {list(dilations)} but the rebuilt body has {built}'
+            )
+    return model
 
 
 def from_pretrained(stem: str | pathlib.Path, *, map_location='cpu', strict: bool = True):
