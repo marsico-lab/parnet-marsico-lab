@@ -31,14 +31,18 @@ tokenizer = parnet.RnaTokenizer()
 model = RBPNet.from_pretrained('path/to/parnet-21m-penalty5')
 
 with torch.no_grad():
-    out = model(**tokenizer('ACGUACGU' * 75))  # 600 nt, the training window
+    out = model(**tokenizer('ACGUACGU' * 75), to_probs=True)  # 600 nt, the training window
 
-out['target']  # (batch, tasks, length)  log-probabilities, normalised over length
-out['control']  # (batch, tasks, length)  log-probabilities, normalised over length
-out['total']  # (batch, tasks, length)  the learned combination; see below
+out['target']  # (batch, tasks, length)  probability over positions, sums to 1
+out['control']  # (batch, tasks, length)  probability over positions, sums to 1
+out['total']  # (batch, tasks, length)  the learned combination
 out['mix_coeff']  # (batch, tasks)         raw output of the mixing layer
 out['target_weight']  # (batch, tasks)         w in [0, 1], the share carried by target
 ```
+
+Drop `to_probs=True` to get log-probabilities instead.
+That is the better scale for anything that compares profiles, and it is what the training loss consumes.
+Without it, `total` from a log-space-mixed model such as the 21M carries the mixing coefficient as an additive offset, so it is a shape without a scale and `exp()` overflows.
 
 `from_pretrained` takes a **stem**; it appends `.safetensors` for the weights and
 `.config.json` for the architecture, and returns the model in eval mode.
@@ -46,10 +50,10 @@ out['target_weight']  # (batch, tasks)         w in [0, 1], the share carried by
 Nothing is truncated.
 Stride is 1 and padding is `same` throughout, so output length equals input length.
 
-The tracks are log-probabilities over position, not logits.
-`target` and `control` exponentiate to 1 along the length axis.
-`total` does not, for log-space mixing such as the 21M, where the mixing coefficient is added as an unbounded logit and shifts the profile by a constant.
-Pass `to_probs=True` to get every track softmaxed along the length axis instead.
+Padding a short sequence into a longer window is **not** free, however.
+An all-zero input column is inert only in the first convolution: after that, biases and batch-norm make the padded region carry activations of the same magnitude as real sequence, and the dilated stack propagates them back.
+Padding a 300 nt sequence to 600 shifts the 21M's embedding by up to 0.55 at every position, including the one furthest from the padding, because the receptive field is wider than the window.
+Pad as little as possible, keep to the 600 nt the models were trained on, and do not compare profiles computed at different padded lengths.
 
 
 ## Model files

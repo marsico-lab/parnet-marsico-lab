@@ -77,7 +77,14 @@ def pad_sequences(
             to give each input its own side.
         length: Target length. Defaults to the longest sequence present.
         pad_index: Index written into padded positions. The default is ``N``, an all-zero
-            one-hot column, so padding contributes nothing to any convolution.
+            one-hot column.
+
+            That column is inert in the first convolution and **not** afterwards: biases
+            and batch-norm give the padded region activations comparable to real sequence,
+            and the dilated stack carries them back into it. Measured on the 21M, padding a
+            300 nt sequence to 600 moves the embedding by up to 0.55 at every position, the
+            furthest included, because the receptive field is wider than the window. Pad as
+            little as possible and never compare profiles padded to different lengths.
 
     Returns:
         ``{"input_ids": (B, L) long, "attention_mask": (B, L) long}``. The mask is 1 at
