@@ -44,6 +44,9 @@ dependencies = [
     "torchmetrics >=1.0",
     "tqdm >=4.67.1",
     "captum >=0.7.0",
+    # The on-disk model format. parnet.pretrained imports it on every
+    # save_pretrained/from_pretrained, so it is a core dependency, not an extra.
+    "safetensors >=0.4",
 ]
 
 
