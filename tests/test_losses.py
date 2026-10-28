@@ -1,11 +1,9 @@
 # %%
 import unittest
 
+import pytest
 import torch
 from torch.distributions import Multinomial
-
-
-import pytest
 
 # tensorflow and tensorflow_probability are used here only as an independent reference
 # implementation of the multinomial log-probability. Neither has ever been a declared

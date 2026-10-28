@@ -1,11 +1,10 @@
+import captum
 import gin
 import torch
 import torch.nn as nn
-import captum
 
-
+from parnet.layers import AdditiveMix, ResConvBlock1D, StemConv1D, _LegacyStateMixin
 from parnet.utils import sequence_to_onehot
-from parnet.layers import StemConv1D, ResConvBlock1D, AdditiveMix, _LegacyStateMixin
 
 
 @gin.configurable()

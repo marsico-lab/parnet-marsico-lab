@@ -1,12 +1,11 @@
 # %%
-import sys
 import copy
 import logging
-
-import gin
-import torch
+import sys
 
 import datasets
+import gin
+import torch
 
 from parnet.utils import sequence_to_onehot
 

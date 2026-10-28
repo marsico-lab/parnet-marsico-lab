@@ -1,6 +1,6 @@
 import click
 
-from .bin import train, predict
+from .bin import predict, train
 
 
 @click.group()

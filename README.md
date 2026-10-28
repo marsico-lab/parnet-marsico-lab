@@ -44,11 +44,11 @@ model = RBPNet.from_pretrained('path/to/parnet-21m-penalty5')
 with torch.no_grad():
     out = model(**tokenizer('ACGUACGU' * 75))
 
-out['target']        # (batch, tasks, length)  log-density over positions
-out['control']       # (batch, tasks, length)
-out['total']         # (batch, tasks, length)  the learned combination
-out['mix_coeff']     # (batch, tasks)          raw output of the mixing layer
-out['target_weight'] # (batch, tasks)          w in [0, 1], the share carried by target
+out['target']  # (batch, tasks, length)  log-density over positions
+out['control']  # (batch, tasks, length)
+out['total']  # (batch, tasks, length)  the learned combination
+out['mix_coeff']  # (batch, tasks)          raw output of the mixing layer
+out['target_weight']  # (batch, tasks)          w in [0, 1], the share carried by target
 ```
 
 `from_pretrained` takes a **stem**; it appends `.safetensors` for the weights and
@@ -87,7 +87,7 @@ else:
 
 ```python
 tokenizer = parnet.RnaTokenizer()
-tokenizer('ACGT')          # same ids as 'acgu'
+tokenizer('ACGT')  # same ids as 'acgu'
 ```
 
 Anything outside `ACGTUN` raises `TokenizationError`, naming the offending positions.
@@ -138,8 +138,8 @@ gradient and never stops pushing.
 
 ```python
 with torch.no_grad():
-    full = model.embed(x)                        # (batch, channels, length)
-    per_sequence = model.embed(x, aggregation='mean')    # or 'center'
+    full = model.embed(x)  # (batch, channels, length)
+    per_sequence = model.embed(x, aggregation='mean')  # or 'center'
 ```
 
 `embed` returns what the output head would have received, so it accounts for a projection
@@ -159,8 +159,8 @@ Choose what to train by **stages that own parameters**, not by counting layers:
 ```python
 from parnet.finetuning import stage_names, set_trainable, describe_trainable
 
-stage_names(model)              # ['stem', 'body.0', ..., 'body.8']
-set_trainable(model, unfreeze_last=0)   # head only
+stage_names(model)  # ['stem', 'body.0', ..., 'body.8']
+set_trainable(model, unfreeze_last=0)  # head only
 describe_trainable(model)
 ```
 
@@ -172,8 +172,9 @@ never consumes a slot, so the same call means the same thing on every model.
 ## Seeding
 
 ```python
-import parnet          # imports first
-parnet.set_seed(42)    # then seed
+import parnet  # imports first
+
+parnet.set_seed(42)  # then seed
 ```
 
 Importing parnet does not reseed your RNG and does not change global numerics. It used to

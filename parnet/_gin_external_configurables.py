@@ -1,8 +1,8 @@
 """Register external configurables for gin."""
 
 import gin
-import torch
 import pytorch_lightning
+import torch
 
 # Activation Functions
 gin.config.external_configurable(torch.nn.ReLU, module='torch.nn')

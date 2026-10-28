@@ -17,7 +17,6 @@ import pandas as pd
 
 from parnet.utils import sequence_to_onehot
 
-
 # %%
 # map bases to their integer representation
 base2int = {'A': 0, 'C': 1, 'G': 2, 'T': 3}

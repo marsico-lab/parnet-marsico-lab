@@ -19,11 +19,11 @@ import torch
 import torch.nn as nn
 
 from parnet.layers import (
+    _LEGACY_ATTRIBUTE_DEFAULTS,
     AdditiveMix,
     MixCoeffPenalty,
     NewAdditiveMix,
     SequenceLinearMix,
-    _LEGACY_ATTRIBUTE_DEFAULTS,
 )
 from parnet.models import RBPNet
 

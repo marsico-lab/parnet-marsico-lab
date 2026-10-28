@@ -1,0 +1,15 @@
+# Pins the local runner image act uses, so `act` runs are reproducible.
+# catthehacker/ubuntu is a community-maintained image that approximates the real
+# (much larger) GitHub-hosted ubuntu-latest runner more closely than plain `ubuntu`.
+#
+#   act -j test            run the CI job locally before pushing
+#
+# act needs a container runtime. ms-01-2 has neither Docker nor Podman, so there the
+# fallback is to run the same two gates by hand against the PINNED ruff:
+#
+#   ruff check . && ruff format --check .
+#   pytest tests -q
+#
+# The pin is what matters: CI once installed ruff 0.17.3 against a local 0.15.14 and
+# failed 61 checks that passed locally.
+-P ubuntu-latest=catthehacker/ubuntu:act-latest

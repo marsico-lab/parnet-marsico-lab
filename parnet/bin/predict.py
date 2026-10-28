@@ -1,8 +1,8 @@
 import pathlib
 
-import tqdm
 import click
 import torch
+import tqdm
 from Bio import SeqIO
 
 

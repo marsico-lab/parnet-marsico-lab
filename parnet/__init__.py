@@ -6,11 +6,18 @@ __version__ = '0.1.1'
 # gin.torch.external_configurables is deliberately NOT imported: it registers torch.nn
 # wholesale, including the deprecated NLLLoss2d, which emits a FutureWarning on every
 # import of parnet.
-from . import _gin_external_configurables  # noqa: F401  (import registers gin configurables)
-
 import torch
 
-from . import data, finetuning, layers, losses, metrics, models, tokenization
+from . import (
+    _gin_external_configurables,  # noqa: F401  (import registers gin configurables)
+    data,
+    finetuning,
+    layers,
+    losses,
+    metrics,
+    models,
+    tokenization,
+)
 from .data import datasets
 from .finetuning import set_trainable, stage_names, trainable_stages
 from .tokenization import RnaTokenizer, ids_to_onehot

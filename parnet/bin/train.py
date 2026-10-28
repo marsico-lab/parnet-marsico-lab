@@ -5,15 +5,15 @@
 # _set_tf_dynamic_memory_growth()
 # TODO: Confirm that we do not need the above code snippet, as we are now using HFDS.
 
-import shutil
-from pathlib import Path
-import warnings
 import logging
+import shutil
+import warnings
+from pathlib import Path
 
 import click
 import gin
-import torch
 import lightning.pytorch as pl
+import torch
 import torchmetrics
 from torchmetrics import MeanMetric
 

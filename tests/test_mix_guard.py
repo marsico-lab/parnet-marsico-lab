@@ -5,6 +5,7 @@ Both are reproduced here as the thing that must raise.
 """
 
 import functools
+
 import pytest
 import torch
 
