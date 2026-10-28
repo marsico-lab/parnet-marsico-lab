@@ -102,14 +102,21 @@ class RBPNet(_LegacyStateMixin, nn.Module):
         input_ids: torch.Tensor = None,
         attention_mask: torch.Tensor = None,
     ) -> dict[str, torch.Tensor]:
-        """Performs a forward pass through the model, returning logits for each postion and task.
+        """Predict the target, control and total tracks.
+
+        The tracks are **log-probabilities over position**, not logits.
+        `target` and `control` are normalised along the length axis: exponentiate either and it sums to 1.
+        `total` is normalised too for convex mixing, but not for log-space mixing such as the released 21M, where the mixing coefficient is added as an unbounded logit and shifts the whole profile by a constant.
 
         Args:
-            sequence (torch.Tensor): Batched one-hot encoded sequences of shape (batch_size, num_channels, sequence_length).
-            to_probs (bool, optional): Whether to convert logits to probabilities. Defaults to False.
+            sequence: One-hot sequences of shape (batch, channels, length).
+            to_probs: Softmax every track along the length axis before returning.
+                This is the way to get a distribution out of a log-space-mixed `total`, whose `exp()` otherwise overflows.
+            input_ids: Token ids of shape (batch, length), as an alternative to `sequence`.
+            attention_mask: Accepted for symmetry with the tokenizer and unused, since padding is `N`, an all-zero column.
 
         Returns:
-            dict[str, torch.Tensor]: A dictionary logits for total, target, control tracks and the mixing coefficient.
+            `target`, `control` and `total` of shape (batch, tasks, length), plus `mix_coeff` and `target_weight` of shape (batch, tasks).
         """
         if sequence is None and input_ids is None:
             raise ValueError('pass either a one-hot `sequence` (B, 4, L) or `input_ids` (B, L)')

@@ -31,7 +31,7 @@ tokenizer = parnet.RnaTokenizer()
 model = RBPNet.from_pretrained('path/to/parnet-21m-penalty5')
 
 with torch.no_grad():
-    out = model(**tokenizer('ACGU' * 150))  # 600 nt, the training window
+    out = model(**tokenizer('ACGUACGU' * 75))  # 600 nt, the training window
 
 out['target']  # (batch, tasks, length)  log-probabilities, normalised over length
 out['control']  # (batch, tasks, length)  log-probabilities, normalised over length
@@ -43,14 +43,13 @@ out['target_weight']  # (batch, tasks)         w in [0, 1], the share carried by
 `from_pretrained` takes a **stem**; it appends `.safetensors` for the weights and
 `.config.json` for the architecture, and returns the model in eval mode.
 
-Nothing is truncated. `stride=1` and `padding='same'` throughout, so output length equals
-input length at 50 nt or 2500; only receptive-field coverage changes.
+Nothing is truncated.
+Stride is 1 and padding is `same` throughout, so output length equals input length.
 
-`target` and `control` always exponentiate to 1 along the length axis. `total` does not,
-for models that mix in log space such as the 21M: the mixing logit shifts the profile by a
-constant, so `exp()` overflows and the result is a shape without a scale. Use
-`out['total'].softmax(-1)` before treating it as a distribution. The 3M backbones mix
-convexly and stay normalised; `logsumexp(-1)` is 0 when a profile is already normalised.
+The tracks are log-probabilities over position, not logits.
+`target` and `control` exponentiate to 1 along the length axis.
+`total` does not, for log-space mixing such as the 21M, where the mixing coefficient is added as an unbounded logit and shifts the profile by a constant.
+Pass `to_probs=True` to get every track softmaxed along the length axis instead.
 
 
 ## Model files
