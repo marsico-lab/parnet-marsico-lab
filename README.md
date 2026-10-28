@@ -30,8 +30,11 @@ from parnet.models import RBPNet
 tokenizer = parnet.RnaTokenizer()
 model = RBPNet.from_pretrained('path/to/parnet-21m-penalty5')
 
+seq = 'ACGUACGU' * 75  # 600 nt, the window the models were trained on
+encoded = tokenizer([seq, seq])  # (2, 600); a bare string would give (1, 600)
+
 with torch.no_grad():
-    out = model(**tokenizer('ACGUACGU' * 75), to_probs=True)  # 600 nt, the training window
+    out = model(**encoded, to_probs=True)
 
 out['target']  # (batch, tasks, length)  probability over positions, sums to 1
 out['control']  # (batch, tasks, length)  probability over positions, sums to 1
@@ -46,6 +49,27 @@ Without it, `total` from a log-space-mixed model such as the 21M carries the mix
 
 `from_pretrained` takes a **stem**; it appends `.safetensors` for the weights and
 `.config.json` for the architecture, and returns the model in eval mode.
+
+### Sequences of different lengths
+
+The tokenizer does not pad, because where a short sequence sits inside the window changes
+every prediction and is not a default worth guessing.
+Ask for the ragged form, then pad, choosing the side:
+
+```python
+from parnet.padding import pad_sequences
+
+ragged = tokenizer([seq, seq[:400]], batched=False)  # list of 1-D tensors, lengths 600 and 400
+padded = pad_sequences(ragged, side='center')  # 'left', 'right', or a pad_side code
+
+with torch.no_grad():
+    out = model(**padded, to_probs=True)
+```
+
+Padding has its own token id, so `padded['input_ids']` records which positions were
+invented and nothing has to be passed alongside it.
+`to_probs` then normalises over the real positions only, and `tokenizer.decode` gives the
+original sequences back.
 
 Nothing is truncated.
 Stride is 1 and padding is `same` throughout, so output length equals input length.
