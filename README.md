@@ -1,177 +1,198 @@
-# parnet
+# PARNET
 
-Sequence models of protein-RNA binding. `parnet` predicts per-nucleotide eCLIP signal from
-RNA sequence, and provides the pieces needed to use a pretrained model: a tokenizer, the
-model, embeddings, and parametrised freezing for fine-tuning.
+Per-nucleotide prediction of RNA-binding protein signal from sequence.
+
+PARNET predicts three tracks for each task: `target`, the RBP eCLIP signal; `control`, the
+size-matched input background; and `total`, a learned combination of the two. Each track is
+a density over positions, so the model predicts where signal falls, not how much there is.
 
 ## Install
 
 ```bash
-pip install -e .
+pip install git+https://github.com/marsico-lab/parnet-marsico-lab.git@refactor
 ```
 
-That is the whole thing on a machine with a recent NVIDIA driver. **On an older driver it
-will silently give you a CPU-only build**, so check first:
+On a machine with an older NVIDIA driver, install torch from the matching CUDA index
+**first**. Otherwise pip resolves a build whose `torch.cuda.is_available()` is `False`,
+silently, with two idle GPUs and no error anywhere:
 
 ```bash
-nvidia-smi --query-gpu=driver_version --format=csv,noheader
-```
-
-| driver | what to do |
-|---|---|
-| 525 or newer | `pip install -e .` and nothing else |
-| 450 to 524 | install torch from the CUDA 11.8 index first, then parnet |
-
-```bash
-# older driver: pin the CUDA 11.8 build FIRST, then install parnet normally
 pip install --index-url https://download.pytorch.org/whl/cu118 "torch>=2.5"
-pip install -e .
+pip install git+https://github.com/marsico-lab/parnet-marsico-lab.git@refactor
 ```
 
-The second command leaves the pinned torch alone, because `torch >=2.5` is already
-satisfied. Verified on driver 515.105.01: after step one, `torch 2.7.1+cu118` with
-`cuda.is_available()` True; after step two, still `2.7.1+cu118`, still True, both GPUs
-visible.
+The second command leaves the pin intact, because `torch>=2.5` is already satisfied.
 
-This matters because the default wheel on PyPI is built against a recent CUDA. On the same
-machine a plain `pip install -e .` pulled `torch 2.14.1+cu130` and
-`torch.cuda.is_available()` returned **False** with two idle A6000s in the box. There is no
-error in that case, only silence and slow training, which is why this section is first.
+### Version bounds
 
-`uv` works the same way and is faster:
-
-```bash
-uv venv --python 3.10 && source .venv/bin/activate
-uv pip install -e .
-```
-
-Dependencies are deliberately unpinned above a floor. If you need a lockfile, generate one
-for your environment rather than expecting the library to impose one.
+parnet is a library, so it does not cap its dependencies speculatively. An upper bound
+set here propagates into every downstream resolution and causes conflicts the consumer
+cannot fix. `requires-python` is `>=3.10` rather than a single minor version, and the
+only real floor is `torch>=2.5`. If you hit a genuine incompatibility, a cap with a
+comment naming it is welcome.
 
 ## Quick start
 
 ```python
 import torch
-from parnet import RnaTokenizer
+import parnet
+from parnet.models import RBPNet
 
-model = torch.load("parnet.21m-5.0.pt", weights_only=False)
-model.eval()                                    # see "Eval mode" below, this is not optional
+tokenizer = parnet.RnaTokenizer()
+model = RBPNet.from_pretrained('path/to/parnet-21m-penalty5')
 
-tok = RnaTokenizer()
-out = model(**tok(["ACGUACGU...", "acgtacgt..."]))
+with torch.no_grad():
+    out = model(**tokenizer('ACGUACGU' * 75))
 
-out["total"]      # (batch, tasks, length) mixed signal logits
-out["target"]     # (batch, tasks, length) target track
-out["control"]    # (batch, tasks, length) control track
-out["mix_coeff"]  # (batch, tasks) mixing coefficient
+out['target']        # (batch, tasks, length)  log-density over positions
+out['control']       # (batch, tasks, length)
+out['total']         # (batch, tasks, length)  the learned combination
+out['mix_coeff']     # (batch, tasks)          raw output of the mixing layer
+out['target_weight'] # (batch, tasks)          w in [0, 1], the share carried by target
 ```
 
-### Input
+`from_pretrained` takes a **stem**; it appends `.safetensors` for the weights and
+`.config.json` for the architecture, and returns the model in eval mode.
 
-`RnaTokenizer` takes DNA or RNA, upper or lower case:
+Use `target_weight`, not `mix_coeff`, when you want the mixing weight. Whether
+`mix_coeff` already is `w` depends on which mixing layer the model has, and deciding that
+by hand has gone wrong in both directions.
 
-- `T` and `U` both map to the same channel. A sequence containing **both** is rejected,
-  because that usually means two sources were concatenated.
-- Lowercase is upper-cased with one warning. In genomic FASTA lowercase marks soft-masked
-  repeats, which is real sequence. It is never dropped.
-- `N` is allowed and becomes an all-zero column.
-- Anything else, including IUPAC ambiguity codes and gaps, is an error naming the
-  positions. Resolve or mask them to `N` yourself, so the choice is visible.
-- Sequences of unequal length are padded with `N`, which is inert because the model is
-  fully convolutional.
+## Model files
 
-`model(sequence=...)` with a `(batch, 4, length)` float one-hot still works unchanged.
+A model is `<name>.safetensors` plus `<name>.config.json`. Whole-module pickles are
+deprecated: a pickle stores a class path and executes code on load, so a renamed class or
+an attribute added after the file was written breaks it, far from the cause.
 
-## Eval mode
+`config.json` carries the architecture, including the parts that are **not** in the state
+dict: activations, kernel sizes, dropout and the dilation schedule. Omitting those
+produces a model that loads cleanly with `strict=True` and computes something different,
+which has happened: a set of backbones trained with GELU were rebuilt with the default
+ReLU and nobody noticed until their stored reference outputs failed to reproduce.
 
-**Call `.eval()` before predicting.** Some released checkpoints were saved in training
-mode, and the models contain `BatchNorm1d` and `Dropout1d`. Without `.eval()` you get batch
-statistics instead of running statistics and active dropout, so predictions are both wrong
-and different on every call. Measured on a 3M checkpoint: train and eval mode differ by
-4.88 in logit space, and two successive forward passes in train mode are not identical.
+The weights are the source of truth. `use_projection` in a config is derived metadata, and
+loading recomputes it from the state dict and raises `ConfigWeightMismatch` if the two
+disagree, rather than trusting either.
 
-## Models
+Each config also records a reference measurement: the mean target weight on a seeded input
+set, with the seed and sequence count. Reproducing it is a cheap check that a model is the
+one you think it is, and it is sensitive at once to a wrong formula flag, a double sigmoid,
+a lost penalty and a reduction mismatch. Use that seeded set rather than your own draw; at
+eight sequences, two independent draws differ by about ten per cent.
 
-Three families, with different widths. Do not hardcode these numbers; read
-`model.body[-1].conv1d.out_channels`, or the length of an embedding.
+## Input
 
-| family | parameters | embedding width | tasks | head |
-|---|---|---|---|---|
-| 21M | 21,814,495 | 768 | 223 | `AdditiveMix` with `SequenceLinearMix` |
-| 7M | 7,534,815 | 512 | 223 | `NewAdditiveMix` with `NewMixCoeffMLP` |
-| 3M | 2,870,067 | 320 | varies by split | `AdditiveMix` with `MixCoeffMLP` |
+`RnaTokenizer` accepts DNA or RNA, upper or lower case, and is explicit about everything
+else:
 
-### The mixing coefficient
+```python
+tokenizer = parnet.RnaTokenizer()
+tokenizer('ACGT')          # same ids as 'acgu'
+```
 
-`mix_coeff` is not the same quantity in every family, which is the single most common way
-to misread a prediction.
+Anything outside `ACGTUN` raises `TokenizationError`, naming the offending positions.
+IUPAC ambiguity codes and gaps are included in that: resolve or mask them to `N` yourself.
 
-- With `SequenceLinearMix` (the 21M) it is an **unbounded logit**, and the target weight is
-  `sigmoid(mix_coeff)`. Values in the thousands are normal.
-- With `MixCoeffMLP` or `NewMixCoeffMLP` (the 7M and 3M) the layer already applies a
-  sigmoid, so `mix_coeff` **is** the weight, in [0, 1].
+This matters more than it sounds. The older helper, `sequence_to_onehot`, silently turns a
+lowercase sequence into an all-zero tensor and the model still returns a confident
+prediction. Soft-masked genome sequence is lowercase, so that was reachable from ordinary
+input.
 
-Pairing a layer that emits one with a mixing rule that expects the other produces NaN or a
-weight silently confined to (0.5, 0.731). The constructor now refuses such a pair with
-`IncompatibleMixError`; pass `strict_mix=False` to override.
+Sequences of unequal length are currently right-padded with `N`, which is inert because
+padding is an all-zero column and the model is fully convolutional. That is a batching
+artifact, not a modelling choice, and the tokenizer is the wrong place for it: the dataset
+layer already pads using each window's recorded `pad_side` (`left`, `right`, or centre for
+tiles built from genes shorter than the window). Padding policy is moving out of the
+tokenizer.
+
+`forward` accepts either the tokenizer's `input_ids` of shape `(batch, length)` or a
+one-hot `(batch, 4, length)`.
+
+### Sequence length
+
+Nothing fixes the input at 600 nt: every layer is `stride=1, padding='same'` and there is
+no upsampling, so any length runs. What differs between models is the receptive field,
+computed from the recorded dilation schedule. Densities are normalised per window, so they
+are not comparable across lengths; compare shapes.
+
+## The output head
+
+Two mixing rules exist and they are not interchangeable.
+
+- **convex combination**, `w * p_target + (1 - w) * p_control`, needs `w` in `[0, 1]`
+- **log-space addition**, `logsumexp(w + log p_target, log p_control)`, takes an unbounded
+  logit
+
+Which one runs is set by `use_maximum_target_control_logprob`. A mixing layer declares what
+it emits in `mix_coeff_range`, and the constructor refuses an incompatible pairing, because
+one direction gives a silent error and the other a `NaN` far from its cause. A bounded
+coefficient fed to the log-sum rule is squashed twice, confining the effective target
+weight to `(0.5, 0.731)` so the control track can never dominate.
+
+The penalty acts on `w`, never on the raw layer output. For a logit-emitting layer those
+are different objectives: penalising `w` is bounded in `[0, factor]` with a gradient that
+vanishes as `w` approaches 0, while penalising the logit is unbounded below with a constant
+gradient and never stops pushing.
 
 ## Embeddings
 
 ```python
-h = model.body(model.stem(x))     # (batch, channels, length)
+with torch.no_grad():
+    full = model.embed(x)                        # (batch, channels, length)
+    per_sequence = model.embed(x, aggregation='mean')    # or 'center'
 ```
 
-`model.projection` sits between body and head. No currently released model has a real one,
-so the embedding width is the body width. The released files disagree on how they spell
-that: the 21M has no `projection` attribute at all, the 7M has one holding `None`, and the
-3M backbones have one holding `nn.Identity`. All three now behave identically, because
-loading fills a missing attribute with `None` and `forward` skips a `None` projection.
+`embed` returns what the output head would have received, so it accounts for a projection
+if the model has one. Ask for the width rather than hard-coding it.
 
-A future model may carry a real projection, in which case the head sees its output instead,
-and `model.projection is not None` is how you tell.
+Use **cosine similarity**, not Euclidean distance. The body is a plain residual stack with
+no renormalisation after the residual add, so activation norm grows with depth and any
+unnormalised metric picks that up as if it were signal.
 
 ## Fine-tuning
 
-Freezing is parametrised by **stages that own parameters**, not by layers, so the same call
-means the same thing whether or not a model has a trainable projection:
+The backbone is reusable; the head is what you replace. Swap `model.head` and leave the
+body and projection alone, because the projection is part of the learned representation.
+
+Choose what to train by **stages that own parameters**, not by counting layers:
 
 ```python
-from parnet import set_trainable, stage_names
+from parnet.finetuning import stage_names, set_trainable, describe_trainable
 
-stage_names(model)                      # ['stem', 'body.0', ..., 'body.8']
-report = set_trainable(model, unfreeze_last=2)
-print(report)                           # which stages are trainable, and parameter counts
+stage_names(model)              # ['stem', 'body.0', ..., 'body.8']
+set_trainable(model, unfreeze_last=0)   # head only
+describe_trainable(model)
 ```
 
-`unfreeze_last=0` freezes the whole backbone, `-1` unfreezes all of it, `N` leaves the last
-`N` stages trainable. A parameterless projection is not a stage, so it never consumes a
-slot. Asking for more stages than exist is an error rather than a silent clamp.
+"Unfreeze the last N layers" breaks as soon as a model may or may not have a trainable
+projection, because the last trainable thing is then sometimes `body[-1]` and sometimes
+`projection`. A parameterless projection owns nothing, never appears in `stage_names`, and
+never consumes a slot, so the same call means the same thing on every model.
 
-To swap the head, replace `model.head` and leave the backbone and projection alone: the
-projection is part of the learned representation.
-
-## Shared machines
-
-`torch` defaults to one thread per core, so several people training at once on one box
-oversubscribe it badly. Measured with four processes on 16 cores: throughput per process
-fell from 47 to 3.9 steps per second, and aggregate throughput fell too. Capping threads
-fixed it, restoring 34.3 steps per second each. Caps of 1, 2 and 4 threads all performed
-the same; 8 dropped to 23.6 and the uncapped 16 to 3.9.
+## Seeding
 
 ```python
-import torch
-torch.set_num_threads(2)
+import parnet          # imports first
+parnet.set_seed(42)    # then seed
 ```
 
-Put that at the top of a shared notebook. GPU and host memory were not the constraint:
-264 MiB of GPU per process and 1.4 GiB of RAM.
+Importing parnet does not reseed your RNG and does not change global numerics. It used to
+do both, via `seed_everything(42)` and `set_float32_matmul_precision('high')`; the latter
+is now `parnet.use_tensor_cores()`.
 
-## Tests
+Seed **after** your imports. Importing `lightning` consumes random numbers by itself and
+parnet imports it transitively, so seeding first and importing afterwards leaves you on a
+different stream.
+
+## Development
 
 ```bash
-pip install pytest && pytest tests -q
+pip install -e ".[dev]"
+pre-commit install
+pytest tests -q
+ruff check . && ruff format --check .
 ```
 
-One test module is skipped unless `tensorflow` and `tensorflow_probability` are present.
-They are used only as an independent reference for the multinomial log-probability and are
-not dependencies of the library.
+The pre-commit hooks run the ruff from your environment rather than pinning their own, so
+the hook and your terminal cannot disagree about whether a file is clean. CI installs the
+same dev extra.
