@@ -3,8 +3,8 @@
 Per-nucleotide prediction of RNA-binding protein signal from sequence.
 
 PARNET predicts three tracks for each task: `target`, the RBP eCLIP signal; `control`, the
-size-matched input background; and `total`, a learned combination of the two. Each track is
-a density over positions, so the model predicts where signal falls, not how much there is.
+size-matched input background; and `total`, a learned combination of the two. 
+Each track is a density over positions i.e. the model predicts where signal falls rather than absolute read counts.
 
 ## Install
 
@@ -12,24 +12,13 @@ a density over positions, so the model predicts where signal falls, not how much
 pip install git+https://github.com/marsico-lab/parnet-marsico-lab.git@refactor
 ```
 
-On a machine with an older NVIDIA driver, install torch from the matching CUDA index
-**first**. Otherwise pip resolves a build whose `torch.cuda.is_available()` is `False`,
-silently, with two idle GPUs and no error anywhere:
+On a machine with an older NVIDIA driver, install torch from the matching CUDA index **first**. 
+Otherwise pip silently resolves a build whose `torch.cuda.is_available()` is `False`.
 
 ```bash
 pip install --index-url https://download.pytorch.org/whl/cu118 "torch>=2.5"
 pip install git+https://github.com/marsico-lab/parnet-marsico-lab.git@refactor
 ```
-
-The second command leaves the pin intact, because `torch>=2.5` is already satisfied.
-
-### Version bounds
-
-parnet is a library, so it does not cap its dependencies speculatively. An upper bound
-set here propagates into every downstream resolution and causes conflicts the consumer
-cannot fix. `requires-python` is `>=3.10` rather than a single minor version, and the
-only real floor is `torch>=2.5`. If you hit a genuine incompatibility, a cap with a
-comment naming it is welcome.
 
 ## Quick start
 
@@ -54,9 +43,6 @@ out['target_weight']  # (batch, tasks)          w in [0, 1], the share carried b
 `from_pretrained` takes a **stem**; it appends `.safetensors` for the weights and
 `.config.json` for the architecture, and returns the model in eval mode.
 
-Use `target_weight`, not `mix_coeff`, when you want the mixing weight. Whether
-`mix_coeff` already is `w` depends on which mixing layer the model has, and deciding that
-by hand has gone wrong in both directions.
 
 ## Model files
 
@@ -65,20 +51,8 @@ deprecated: a pickle stores a class path and executes code on load, so a renamed
 an attribute added after the file was written breaks it, far from the cause.
 
 `config.json` carries the architecture, including the parts that are **not** in the state
-dict: activations, kernel sizes, dropout and the dilation schedule. Omitting those
-produces a model that loads cleanly with `strict=True` and computes something different,
-which has happened: a set of backbones trained with GELU were rebuilt with the default
-ReLU and nobody noticed until their stored reference outputs failed to reproduce.
+dict: activations, kernel sizes, dropout and the dilation schedule. 
 
-The weights are the source of truth. `use_projection` in a config is derived metadata, and
-loading recomputes it from the state dict and raises `ConfigWeightMismatch` if the two
-disagree, rather than trusting either.
-
-Each config also records a reference measurement: the mean target weight on a seeded input
-set, with the seed and sequence count. Reproducing it is a cheap check that a model is the
-one you think it is, and it is sensitive at once to a wrong formula flag, a double sigmoid,
-a lost penalty and a reduction mismatch. Use that seeded set rather than your own draw; at
-eight sequences, two independent draws differ by about ten per cent.
 
 ## Input
 
@@ -91,20 +65,10 @@ tokenizer('ACGT')  # same ids as 'acgu'
 ```
 
 Anything outside `ACGTUN` raises `TokenizationError`, naming the offending positions.
-IUPAC ambiguity codes and gaps are included in that: resolve or mask them to `N` yourself.
 
-This matters more than it sounds. The older helper, `sequence_to_onehot`, silently turns a
-lowercase sequence into an all-zero tensor and the model still returns a confident
-prediction. Soft-masked genome sequence is lowercase, so that was reachable from ordinary
-input.
-
-The tokenizer does not pad. Tokenizing has one right answer; padding does not. Where a
-short sequence sits inside a window is a modelling choice, and in a sequence-to-signal
-model it shifts every prediction, so it is not something to leave to a default.
-
-`batched=True`, the default, stacks into one `(batch, length)` tensor and requires the
-sequences to be the same length. `batched=False` returns a list of 1-D tensors and leaves
-ragged input ragged:
+The tokenizer provides an argument `batched=True`, that stacks a list of sequences into one `(batch, length)` tensor.
+This requires the sequences to be the same length. 
+`batched=False` returns a list of 1-D tensors and leaves ragged input ragged:
 
 ```python
 tokenizer(['ACGU', 'GGCC'])  # (2, 4) tensor
@@ -120,30 +84,21 @@ encoded = tokenizer(['ACGU', 'GG'], batched=False)
 pad_sequences(encoded, side='center')  # also 'left', 'right', or one side per sequence
 ```
 
-It accepts the dataset layer's integer `pad_side` codes (`0` centre, `1` left, `2` right,
+It accepts the dataset layer's integer `pad_side` codes (`0` center, `1` left, `2` right,
 `-1` none), always returns an `attention_mask` so no caller has to infer which positions
-were invented, and refuses to truncate. The centre tie-break is ceil-left, floor-right,
-matching the 600 nt source tiles; this is checked against the dataset layer's own
-`_compute_pad_sizes` over every code and 44 lengths. Padding with `N` is inert: it is an
-all-zero column and the model is fully convolutional.
+were invented, and refuses to truncate. 
 
-`forward` accepts either the tokenizer's `input_ids` of shape `(batch, length)` or a
-one-hot `(batch, 4, length)`.
+The center tie-break is ceil-left, floor-right, matching the 600 nt source tiles; this is checked against the dataset layer's own
+`_compute_pad_sizes`. 
 
-### Sequence length
-
-Nothing fixes the input at 600 nt: every layer is `stride=1, padding='same'` and there is
-no upsampling, so any length runs. What differs between models is the receptive field,
-computed from the recorded dilation schedule. Densities are normalised per window, so they
-are not comparable across lengths; compare shapes.
+`forward` accepts either the tokenizer's `input_ids` of shape `(batch, length)` or a one-hot `(batch, 4, length)`.
 
 ## The output head
 
 Two mixing rules exist and they are not interchangeable.
 
 - **convex combination**, `w * p_target + (1 - w) * p_control`, needs `w` in `[0, 1]`
-- **log-space addition**, `logsumexp(w + log p_target, log p_control)`, takes an unbounded
-  logit
+- **log-space addition**, `logsumexp(w + log p_target, log p_control)`, takes an unbounded logit
 
 Which one runs is set by `use_maximum_target_control_logprob`. A mixing layer declares what
 it emits in `mix_coeff_range`, and the constructor refuses an incompatible pairing, because
@@ -165,11 +120,7 @@ with torch.no_grad():
 ```
 
 `embed` returns what the output head would have received, so it accounts for a projection
-if the model has one. Ask for the width rather than hard-coding it.
-
-Use **cosine similarity**, not Euclidean distance. The body is a plain residual stack with
-no renormalisation after the residual add, so activation norm grows with depth and any
-unnormalised metric picks that up as if it were signal.
+if the model has one.
 
 ## Fine-tuning
 
@@ -188,7 +139,7 @@ describe_trainable(model)
 
 "Unfreeze the last N layers" breaks as soon as a model may or may not have a trainable
 projection, because the last trainable thing is then sometimes `body[-1]` and sometimes
-`projection`. A parameterless projection owns nothing, never appears in `stage_names`, and
+`projection`. A parameterless projection never appears in `stage_names`, and
 never consumes a slot, so the same call means the same thing on every model.
 
 ## Seeding
