@@ -33,9 +33,24 @@ VOCAB: dict[str, int] = {'A': 0, 'C': 1, 'G': 2, 'U': 3, 'T': 3, 'N': 4}
 #: Number of real channels the model consumes. ``N`` is represented as an all-zero column.
 N_CHANNELS = 4
 
-#: Index used for padding; identical to ``N`` because the model is fully convolutional and
-#: an all-zero column contributes nothing to any convolution.
-PAD_INDEX = 4
+#: Padding has its own id, distinct from ``N``.
+#:
+#: Both one-hot to the same all-zero column, so the distinction is invisible to the model
+#: and cannot be otherwise: the released models take four input channels, and a fifth would
+#: be a different architecture.
+#:
+#: What it buys is that ``input_ids`` describes itself. ``ids == PAD_INDEX`` recovers which
+#: positions were invented without a second tensor travelling alongside, and the remaining
+#: ids still decode to the original sequence, so a padded run can be compared against its
+#: unpadded original from the ids alone.
+#:
+#: The distinction survives only on the ids. Hand the model a one-hot ``(B, 4, L)`` and it
+#: is already gone, because padding and ``N`` are the same column there.
+PAD_INDEX = 5
+
+#: Reverse of :data:`VOCAB`, for :meth:`RnaTokenizer.decode`. ``T`` is not represented:
+#: channel 3 decodes to ``U``, since the two share an id and RNA is the model's domain.
+ID_TO_CHAR: dict[int, str] = {0: 'A', 1: 'C', 2: 'G', 3: 'U', 4: 'N', PAD_INDEX: '-'}
 
 
 class TokenizationError(ValueError):
@@ -155,14 +170,46 @@ class RnaTokenizer:
             )
         return {'input_ids': torch.tensor(ids, dtype=torch.long)}
 
+    def decode(self, input_ids: torch.Tensor | list[int], *, keep_padding: bool = False) -> str:
+        """Turn ids back into a sequence.
+
+        Together with the dedicated padding id this makes a padded batch reversible: the
+        original sequence comes back without having been kept alongside.
+
+        Args:
+            input_ids: Ids for ONE sequence, as a 1-D tensor or a list.
+            keep_padding: Render padded positions as ``-`` instead of dropping them.
+
+        Returns:
+            The sequence in ``ACGUN``. ``T`` does not come back: it shares an id with ``U``,
+            and that is the one piece of input the tokenizer does not preserve.
+
+        Raises:
+            TokenizationError: If an id is outside the vocabulary.
+        """
+        if isinstance(input_ids, torch.Tensor):
+            if input_ids.dim() != 1:
+                raise TokenizationError(f'decode takes one sequence; got shape {tuple(input_ids.shape)}')
+            input_ids = input_ids.tolist()
+        try:
+            chars = [ID_TO_CHAR[int(i)] for i in input_ids]
+        except KeyError as error:
+            raise TokenizationError(f'id {error.args[0]} is not in the vocabulary') from None
+        return ''.join(chars) if keep_padding else ''.join(c for c in chars if c != '-')
+
 
 def ids_to_onehot(input_ids: torch.Tensor) -> torch.Tensor:
     """Convert ``(B, L)`` integer ids to the ``(B, 4, L)`` float one-hot the model consumes.
 
-    ``N`` and padding (index 4) become all-zero columns, which contribute nothing to any
-    convolution.
+    Both ``N`` and padding become all-zero columns. This is where the two stop being
+    distinguishable, so anything that needs to know which positions were padding must read
+    it off the ids before calling this, or let the model do it by passing ``input_ids``.
+
+    An all-zero column is inert in the first convolution only. Biases and batch-norm give
+    the padded region activations downstream, so padding is not free; see
+    :mod:`parnet.padding`.
     """
     if input_ids.dim() != 2:
         raise TokenizationError(f'expected (B, L) ids, got shape {tuple(input_ids.shape)}')
-    oh = torch.nn.functional.one_hot(input_ids.long(), num_classes=N_CHANNELS + 1)
+    oh = torch.nn.functional.one_hot(input_ids.long(), num_classes=PAD_INDEX + 1)
     return oh[..., :N_CHANNELS].permute(0, 2, 1).to(torch.float32)

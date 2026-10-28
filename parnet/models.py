@@ -6,6 +6,7 @@ import gin
 import torch
 import torch.nn as nn
 
+import parnet.tokenization as _tokenization
 from parnet.layers import ResConvBlock1D, StemConv1D, TargetControlMix, _LegacyStateMixin
 from parnet.utils import sequence_to_onehot
 
@@ -101,6 +102,7 @@ class RBPNet(_LegacyStateMixin, nn.Module):
         *,
         input_ids: torch.Tensor = None,
         attention_mask: torch.Tensor = None,
+        mask_padding: bool = True,
     ) -> dict[str, torch.Tensor]:
         """Predict the target, control and total tracks.
 
@@ -113,7 +115,11 @@ class RBPNet(_LegacyStateMixin, nn.Module):
             to_probs: Softmax every track along the length axis before returning.
                 This is the way to get a distribution out of a log-space-mixed `total`, whose `exp()` otherwise overflows.
             input_ids: Token ids of shape (batch, length), as an alternative to `sequence`.
-            attention_mask: Accepted for symmetry with the tokenizer and unused, since padding is `N`, an all-zero column.
+                Padding carries its own id, so these are self-describing and no mask has to be passed with them.
+            attention_mask: Accepted for symmetry with the tokenizer and unused; padding is read from `input_ids` instead.
+            mask_padding: With `to_probs`, normalise over real positions only, so no probability is spent on positions that do not exist.
+                Requires `input_ids`; a one-hot input has already lost the distinction between padding and `N`.
+                Set it False to reproduce training-time normalisation, which ran over the whole window.
 
         Returns:
             `target`, `control` and `total` of shape (batch, tasks, length), plus `mix_coeff` and `target_weight` of shape (batch, tasks).
@@ -122,6 +128,8 @@ class RBPNet(_LegacyStateMixin, nn.Module):
             raise ValueError('pass either a one-hot `sequence` (B, 4, L) or `input_ids` (B, L)')
         if sequence is not None and input_ids is not None:
             raise ValueError('pass `sequence` or `input_ids`, not both')
+        # Keep the ids: once they are a one-hot, padding and N are the same column.
+        padding_ids = input_ids
         if sequence is None:
             sequence = input_ids
         # `attention_mask` is accepted for API symmetry with the tokenizer's output and is
@@ -154,12 +162,25 @@ class RBPNet(_LegacyStateMixin, nn.Module):
             x = {'total': x}
 
         if to_probs:
-            # convert track logits to probabilities
-            x['total'] = x['total'].softmax(dim=-1)
-            if 'target' in x:
-                x['target'] = x['target'].softmax(dim=-1)
-            if 'control' in x:
-                x['control'] = x['control'].softmax(dim=-1)
+            # Normalise over real positions only when we can tell which they are. Padding
+            # carries its own id, so passing `input_ids` is enough and no mask has to
+            # travel alongside; a one-hot input has already lost the distinction.
+            keep = None
+            if mask_padding and padding_ids is not None:
+                keep = padding_ids != _tokenization.PAD_INDEX
+                if bool(keep.all()):
+                    keep = None
+
+            for track in ('total', 'target', 'control'):
+                if track not in x:
+                    continue
+                if keep is None:
+                    x[track] = x[track].softmax(dim=-1)
+                else:
+                    # Send padded positions to -inf before the softmax, so they receive no
+                    # probability and the real positions sum to 1 on their own.
+                    masked = x[track].masked_fill(~keep.unsqueeze(1), float('-inf'))
+                    x[track] = masked.softmax(dim=-1)
         return x
 
     @classmethod
