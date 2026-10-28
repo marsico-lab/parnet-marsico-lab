@@ -98,12 +98,34 @@ lowercase sequence into an all-zero tensor and the model still returns a confide
 prediction. Soft-masked genome sequence is lowercase, so that was reachable from ordinary
 input.
 
-Sequences of unequal length are currently right-padded with `N`, which is inert because
-padding is an all-zero column and the model is fully convolutional. That is a batching
-artifact, not a modelling choice, and the tokenizer is the wrong place for it: the dataset
-layer already pads using each window's recorded `pad_side` (`left`, `right`, or centre for
-tiles built from genes shorter than the window). Padding policy is moving out of the
-tokenizer.
+The tokenizer does not pad. Tokenizing has one right answer; padding does not. Where a
+short sequence sits inside a window is a modelling choice, and in a sequence-to-signal
+model it shifts every prediction, so it is not something to leave to a default.
+
+`batched=True`, the default, stacks into one `(batch, length)` tensor and requires the
+sequences to be the same length. `batched=False` returns a list of 1-D tensors and leaves
+ragged input ragged:
+
+```python
+tokenizer(['ACGU', 'GGCC'])                 # (2, 4) tensor
+tokenizer(['ACGU', 'GG'], batched=False)    # [tensor(4), tensor(2)]
+```
+
+Padding lives in `parnet.padding`, where the side has to be stated:
+
+```python
+from parnet.padding import pad_sequences
+
+encoded = tokenizer(['ACGU', 'GG'], batched=False)
+pad_sequences(encoded, side='center')       # also 'left', 'right', or one side per sequence
+```
+
+It accepts the dataset layer's integer `pad_side` codes (`0` centre, `1` left, `2` right,
+`-1` none), always returns an `attention_mask` so no caller has to infer which positions
+were invented, and refuses to truncate. The centre tie-break is ceil-left, floor-right,
+matching the 600 nt source tiles; this is checked against the dataset layer's own
+`_compute_pad_sizes` over every code and 44 lengths. Padding with `N` is inert: it is an
+all-zero column and the model is fully convolutional.
 
 `forward` accepts either the tokenizer's `input_ids` of shape `(batch, length)` or a
 one-hot `(batch, 4, length)`.
