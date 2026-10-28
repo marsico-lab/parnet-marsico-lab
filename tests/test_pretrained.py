@@ -253,3 +253,43 @@ def test_unknown_activation_is_rejected(tmp_path):
     path.write_text(json.dumps(config))
     with pytest.raises(KeyError, match='not a registered activation'):
         from_pretrained(tmp_path / 'tiny')
+
+
+def test_embed_works_when_projection_is_none():
+    """embed() called self.projection(x) unguarded, unlike forward().
+
+    Legacy checkpoints get projection=None from _LegacyStateMixin, so embed() raised
+    TypeError: 'NoneType' object is not callable from inside the library.
+    """
+    model = RBPNet(num_tasks=2, layers=2, embedding_dim=16, use_projection=False,
+                   head_layer=functools.partial(
+                       layers.AdditiveMix,
+                       mix_coeff_layer=layers.MixCoeffMLP,
+                       use_maximum_target_control_logprob=True))
+    model.eval()
+    model.projection = None          # exactly what the legacy loader leaves behind
+
+    x = torch.rand(2, 4, 64)
+    with torch.no_grad():
+        full = model.embed(x)
+        mean = model.embed(x, aggregation='mean')
+        center = model.embed(x, aggregation='center')
+        assert torch.equal(model(x)['total'], model(x)['total'])
+
+    assert full.shape[0] == 2 and full.shape[-1] == 64
+    assert mean.shape == full.shape[:2]
+    assert center.shape == full.shape[:2]
+
+
+def test_embedding_width_matches_what_the_head_receives():
+    """embed() must return the width a head would see, which is the body width here."""
+    model = RBPNet(num_tasks=2, layers=2, embedding_dim=16, use_projection=False,
+                   stem_layer=functools.partial(layers.StemConv1D, filters=24),
+                   body_layer=functools.partial(layers.ResConvBlock1D, filters=24),
+                   head_layer=functools.partial(
+                       layers.AdditiveMix,
+                       mix_coeff_layer=layers.MixCoeffMLP,
+                       use_maximum_target_control_logprob=True))
+    model.eval()
+    with torch.no_grad():
+        assert model.embed(torch.rand(1, 4, 64)).shape[1] == 24

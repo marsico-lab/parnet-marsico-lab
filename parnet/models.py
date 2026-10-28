@@ -165,7 +165,11 @@ class RBPNet(_LegacyStateMixin, nn.Module):
         """
         x = self.stem(sequence)
         x = self.body(x)
-        x = self.projection(x)
+        # Same guard as forward(): `projection` is None for checkpoints that have none,
+        # which is every released model loaded from a legacy pickle. Calling None(x)
+        # here would raise TypeError from inside embed() with no useful message.
+        if self.projection is not None:
+            x = self.projection(x)
 
         if aggregation is None:
             return x
