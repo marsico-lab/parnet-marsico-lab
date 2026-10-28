@@ -107,8 +107,8 @@ sequences to be the same length. `batched=False` returns a list of 1-D tensors a
 ragged input ragged:
 
 ```python
-tokenizer(['ACGU', 'GGCC'])                 # (2, 4) tensor
-tokenizer(['ACGU', 'GG'], batched=False)    # [tensor(4), tensor(2)]
+tokenizer(['ACGU', 'GGCC'])  # (2, 4) tensor
+tokenizer(['ACGU', 'GG'], batched=False)  # [tensor(4), tensor(2)]
 ```
 
 Padding lives in `parnet.padding`, where the side has to be stated:
@@ -117,7 +117,7 @@ Padding lives in `parnet.padding`, where the side has to be stated:
 from parnet.padding import pad_sequences
 
 encoded = tokenizer(['ACGU', 'GG'], batched=False)
-pad_sequences(encoded, side='center')       # also 'left', 'right', or one side per sequence
+pad_sequences(encoded, side='center')  # also 'left', 'right', or one side per sequence
 ```
 
 It accepts the dataset layer's integer `pad_side` codes (`0` centre, `1` left, `2` right,
