@@ -120,6 +120,23 @@ class RBPNet(_LegacyStateMixin, nn.Module):
                 x['control'] = x['control'].softmax(dim=-1)
         return x
 
+    @classmethod
+    def from_pretrained(cls, stem, *, map_location='cpu', strict: bool = True):
+        """Load a model saved as ``<stem>.safetensors`` + ``<stem>.config.json``.
+
+        Returns the model in eval mode. See :mod:`parnet.pretrained` for the format and
+        for why the weights, not the config, decide whether a projection exists.
+        """
+        from parnet.pretrained import from_pretrained as _from_pretrained
+
+        return _from_pretrained(stem, map_location=map_location, strict=strict)
+
+    def save_pretrained(self, stem, *, name=None, extra=None):
+        """Write this model as ``<stem>.safetensors`` + ``<stem>.config.json``."""
+        from parnet.pretrained import save_pretrained as _save_pretrained
+
+        return _save_pretrained(self, stem, name=name, extra=extra)
+
     def predict_from_sequence(self, sequences: str | list[str], to_probs=False):
         """Predicts RBP binding probabilities from a sequence.
 
