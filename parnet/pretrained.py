@@ -25,7 +25,6 @@ import json
 import pathlib
 from typing import Any
 
-import torch
 import torch.nn as nn
 
 from parnet import layers as _layers
@@ -104,10 +103,7 @@ def state_dict_has_projection(state_dict: dict[str, Any]) -> bool:
     representation of "there is none" and why this function looks for weights rather than
     for an attribute.
     """
-    return any(
-        key.startswith('projection.') and key.endswith(('.weight', '.bias'))
-        for key in state_dict
-    )
+    return any(key.startswith('projection.') and key.endswith(('.weight', '.bias')) for key in state_dict)
 
 
 def _output_conv(head_layer: nn.Module) -> nn.Conv1d:
@@ -170,9 +166,7 @@ def describe(model: nn.Module) -> dict[str, Any]:
         'mix_coeff_class': type(mix).__name__,
         'mix_coeff_range': getattr(type(mix), 'mix_coeff_range', None),
         'head_layer_class': type(head.head_target).__name__,
-        'use_maximum_target_control_logprob': bool(
-            getattr(head, 'use_maximum_target_control_logprob', False)
-        ),
+        'use_maximum_target_control_logprob': bool(getattr(head, 'use_maximum_target_control_logprob', False)),
         'control_nograd': bool(getattr(head, 'control_nograd', False)),
         'penalty_class': type(penalty).__name__ if penalty is not None else None,
         'penalty_factor': float(penalty.factor) if penalty is not None else None,
@@ -208,7 +202,7 @@ def save_pretrained(
     if arch['use_projection'] != state_dict_has_projection(state):
         raise ConfigWeightMismatch(
             'Refusing to write a config that disagrees with the weights: describe() says '
-            f"use_projection={arch['use_projection']} but the state dict "
+            f'use_projection={arch["use_projection"]} but the state dict '
             f'{"has" if state_dict_has_projection(state) else "has no"} projection weights.'
         )
 
@@ -264,9 +258,7 @@ def build_from_config(arch: dict[str, Any]):
         'control_nograd': arch.get('control_nograd', False),
     }
     if head_cls is _layers.AdditiveMix:
-        head_kwargs['use_maximum_target_control_logprob'] = arch.get(
-            'use_maximum_target_control_logprob', False
-        )
+        head_kwargs['use_maximum_target_control_logprob'] = arch.get('use_maximum_target_control_logprob', False)
 
     # The stem's filter count sets the width of the whole residual stream, so it has to be
     # rebuilt at the trained width. Configs written before body_width existed fall back to
@@ -328,9 +320,7 @@ def build_from_config(arch: dict[str, Any]):
     if dilations:
         built = [int(block.conv1d.dilation[0]) for block in model.body]
         if built != list(dilations):
-            raise ConfigWeightMismatch(
-                f'config records dilations {list(dilations)} but the rebuilt body has {built}'
-            )
+            raise ConfigWeightMismatch(f'config records dilations {list(dilations)} but the rebuilt body has {built}')
     return model
 
 

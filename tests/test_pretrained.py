@@ -215,9 +215,7 @@ def test_non_parametric_architecture_survives_the_round_trip(tmp_path):
         body_layer=functools.partial(layers.ResConvBlock1D, filters=24, activation=torch.nn.GELU()),
         head_layer=functools.partial(
             layers.AdditiveMix,
-            mix_coeff_layer=functools.partial(
-                layers.MixCoeffMLP, units=32, act=torch.nn.GELU()
-            ),
+            mix_coeff_layer=functools.partial(layers.MixCoeffMLP, units=32, act=torch.nn.GELU()),
             use_maximum_target_control_logprob=True,
         ),
     )
@@ -261,13 +259,17 @@ def test_embed_works_when_projection_is_none():
     Legacy checkpoints get projection=None from _LegacyStateMixin, so embed() raised
     TypeError: 'NoneType' object is not callable from inside the library.
     """
-    model = RBPNet(num_tasks=2, layers=2, embedding_dim=16, use_projection=False,
-                   head_layer=functools.partial(
-                       layers.AdditiveMix,
-                       mix_coeff_layer=layers.MixCoeffMLP,
-                       use_maximum_target_control_logprob=True))
+    model = RBPNet(
+        num_tasks=2,
+        layers=2,
+        embedding_dim=16,
+        use_projection=False,
+        head_layer=functools.partial(
+            layers.AdditiveMix, mix_coeff_layer=layers.MixCoeffMLP, use_maximum_target_control_logprob=True
+        ),
+    )
     model.eval()
-    model.projection = None          # exactly what the legacy loader leaves behind
+    model.projection = None  # exactly what the legacy loader leaves behind
 
     x = torch.rand(2, 4, 64)
     with torch.no_grad():
@@ -283,13 +285,17 @@ def test_embed_works_when_projection_is_none():
 
 def test_embedding_width_matches_what_the_head_receives():
     """embed() must return the width a head would see, which is the body width here."""
-    model = RBPNet(num_tasks=2, layers=2, embedding_dim=16, use_projection=False,
-                   stem_layer=functools.partial(layers.StemConv1D, filters=24),
-                   body_layer=functools.partial(layers.ResConvBlock1D, filters=24),
-                   head_layer=functools.partial(
-                       layers.AdditiveMix,
-                       mix_coeff_layer=layers.MixCoeffMLP,
-                       use_maximum_target_control_logprob=True))
+    model = RBPNet(
+        num_tasks=2,
+        layers=2,
+        embedding_dim=16,
+        use_projection=False,
+        stem_layer=functools.partial(layers.StemConv1D, filters=24),
+        body_layer=functools.partial(layers.ResConvBlock1D, filters=24),
+        head_layer=functools.partial(
+            layers.AdditiveMix, mix_coeff_layer=layers.MixCoeffMLP, use_maximum_target_control_logprob=True
+        ),
+    )
     model.eval()
     with torch.no_grad():
         assert model.embed(torch.rand(1, 4, 64)).shape[1] == 24

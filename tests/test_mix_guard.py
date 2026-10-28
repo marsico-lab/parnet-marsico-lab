@@ -27,42 +27,48 @@ N = 8
 
 
 def test_declared_ranges():
-    assert mix_coeff_range(SequenceLinearMix(N)) == "logit"
-    assert mix_coeff_range(MixCoeffMLP(N)) == "unit"
-    assert mix_coeff_range(NewMixCoeffMLP(N)) == "unit"
+    assert mix_coeff_range(SequenceLinearMix(N)) == 'logit'
+    assert mix_coeff_range(MixCoeffMLP(N)) == 'unit'
+    assert mix_coeff_range(NewMixCoeffMLP(N)) == 'unit'
 
 
 # -- the two real released combinations must keep working ---------------------------
 
+
 def test_released_21m_combination_is_accepted():
     # AdditiveMix + SequenceLinearMix (logit) with the log-sum branch.
-    AdditiveMix(N, head_layer=LinearProjectionHead, mix_coeff_layer=SequenceLinearMix,
-                use_maximum_target_control_logprob=False)
+    AdditiveMix(
+        N, head_layer=LinearProjectionHead, mix_coeff_layer=SequenceLinearMix, use_maximum_target_control_logprob=False
+    )
 
 
 def test_3m_and_7m_combination_is_accepted():
     # AdditiveMix + MixCoeffMLP (unit) with the max-logprob branch, which is how build_3m
     # constructs the 3M backbones.
-    AdditiveMix(N, head_layer=LinearProjectionHead, mix_coeff_layer=MixCoeffMLP,
-                penalty_layer=MixCoeffPenalty, use_maximum_target_control_logprob=True)
+    AdditiveMix(
+        N,
+        head_layer=LinearProjectionHead,
+        mix_coeff_layer=MixCoeffMLP,
+        penalty_layer=MixCoeffPenalty,
+        use_maximum_target_control_logprob=True,
+    )
     # NewAdditiveMix + NewMixCoeffMLP (unit), the 7M head.
     NewAdditiveMix(N, head_layer=LinearProjection, mix_coeff_layer=NewMixCoeffMLP)
 
 
 # -- the two failure modes ------------------------------------------------------------
 
+
 def test_logit_into_convex_raises():
     # Measured consequence: NaN logits, because (1 - w) goes large and negative.
-    with pytest.raises(IncompatibleMixError, match="NaN"):
-        AdditiveMix(N, mix_coeff_layer=SequenceLinearMix,
-                    use_maximum_target_control_logprob=True)
+    with pytest.raises(IncompatibleMixError, match='NaN'):
+        AdditiveMix(N, mix_coeff_layer=SequenceLinearMix, use_maximum_target_control_logprob=True)
 
 
 def test_unit_into_logsum_raises():
     # Measured consequence: effective target weight confined to (0.5, 0.731).
-    with pytest.raises(IncompatibleMixError, match=r"0.5, 0.731"):
-        AdditiveMix(N, mix_coeff_layer=MixCoeffMLP,
-                    use_maximum_target_control_logprob=False)
+    with pytest.raises(IncompatibleMixError, match=r'0.5, 0.731'):
+        AdditiveMix(N, mix_coeff_layer=MixCoeffMLP, use_maximum_target_control_logprob=False)
 
 
 def test_additivemix_defaults_are_the_incompatible_pair():
@@ -73,16 +79,16 @@ def test_additivemix_defaults_are_the_incompatible_pair():
 
 
 def test_newadditivemix_rejects_a_logit_layer():
-    with pytest.raises(IncompatibleMixError, match="NaN"):
+    with pytest.raises(IncompatibleMixError, match='NaN'):
         NewAdditiveMix(N, mix_coeff_layer=SequenceLinearMix)
 
 
 # -- escape hatch and unknown layers --------------------------------------------------
 
+
 def test_strict_mix_false_warns_instead_of_raising():
-    with pytest.warns(UserWarning, match="mix_coeff"):
-        AdditiveMix(N, mix_coeff_layer=MixCoeffMLP,
-                    use_maximum_target_control_logprob=False, strict_mix=False)
+    with pytest.warns(UserWarning, match='mix_coeff'):
+        AdditiveMix(N, mix_coeff_layer=MixCoeffMLP, use_maximum_target_control_logprob=False, strict_mix=False)
 
 
 def test_unknown_layer_passes_unchecked():
@@ -99,7 +105,7 @@ def test_unknown_layer_passes_unchecked():
 
 def test_user_layer_can_opt_in_and_then_is_checked():
     class MyLogitMix(torch.nn.Module):
-        mix_coeff_range = "logit"
+        mix_coeff_range = 'logit'
 
         def __init__(self, num_tasks):
             super().__init__()
@@ -113,7 +119,7 @@ def test_user_layer_can_opt_in_and_then_is_checked():
 
 
 def test_check_helper_is_a_no_op_when_ranges_agree():
-    check_mix_compatibility(MixCoeffMLP(N), "unit", "test rule")
+    check_mix_compatibility(MixCoeffMLP(N), 'unit', 'test rule')
 
 
 def test_mix_coeff_keeps_the_batch_axis_at_batch_size_one():
@@ -160,6 +166,7 @@ def test_batching_does_not_change_predictions():
 
 
 # --- the penalty acts on the target weight, not the raw layer output -----------------
+
 
 def _head(mix_layer, use_max, factor=5.0, num_tasks=2):
     return layers.AdditiveMix(

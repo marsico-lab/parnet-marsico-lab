@@ -64,7 +64,7 @@ def test_AdditiveMix_max_logprob_handles_double_neg_inf_without_nan():
     output = layer.forward(None)  # must not raise ValueError('Logits contain NaN or Inf values.')
 
     assert not torch.isnan(output['total']).any()
-    assert torch.isneginf(output['total'][0, 0, 2]), "the double -inf position should be exactly -inf, not NaN"
+    assert torch.isneginf(output['total'][0, 0, 2]), 'the double -inf position should be exactly -inf, not NaN'
     # The two ordinary positions should be finite, unaffected by the fix.
     assert torch.isfinite(output['total'][0, 0, 0])
     assert torch.isfinite(output['total'][0, 0, 1])

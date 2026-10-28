@@ -50,36 +50,40 @@ class LightningModel(pl.LightningModule):
         if metrics is None:
             metrics = {}
 
-        self.train_metrics_losses = torchmetrics.MetricCollection({
-            'train/loss': torchmetrics.MeanMetric(),
-            'train/loss_eCLIP': torchmetrics.MeanMetric(),
-            'train/loss_SMI': torchmetrics.MeanMetric(),
-            'train/loss_penalty': torchmetrics.MeanMetric(),
-        })
-        self.train_metrics_eCLIP = torchmetrics.MetricCollection({
-            'train/' + name + '_eCLIP': metric() for name, metric in metrics.items()
-        })
+        self.train_metrics_losses = torchmetrics.MetricCollection(
+            {
+                'train/loss': torchmetrics.MeanMetric(),
+                'train/loss_eCLIP': torchmetrics.MeanMetric(),
+                'train/loss_SMI': torchmetrics.MeanMetric(),
+                'train/loss_penalty': torchmetrics.MeanMetric(),
+            }
+        )
+        self.train_metrics_eCLIP = torchmetrics.MetricCollection(
+            {'train/' + name + '_eCLIP': metric() for name, metric in metrics.items()}
+        )
         if self.use_control:
-            self.train_metrics_SMI = torchmetrics.MetricCollection({
-                'train/' + name + '_SMI': metric() for name, metric in metrics.items()
-            })
+            self.train_metrics_SMI = torchmetrics.MetricCollection(
+                {'train/' + name + '_SMI': metric() for name, metric in metrics.items()}
+            )
 
-        self.val_metrics_losses = torchmetrics.MetricCollection({
-            'val/loss': torchmetrics.MeanMetric(),
-            'val/loss_eCLIP': torchmetrics.MeanMetric(),
-            'val/loss_SMI': torchmetrics.MeanMetric(),
-            'val/loss_penalty': torchmetrics.MeanMetric(),
-            'val/mix_coeff': torchmetrics.MeanMetric(),
-            'val/mix_coeff_std-over-exp': torchmetrics.MeanMetric(),
-            'val/mix_coeff_std-over-batch': torchmetrics.MeanMetric(),
-        })
-        self.val_metrics_eCLIP = torchmetrics.MetricCollection({
-            'val/' + name + '_eCLIP': metric() for name, metric in metrics.items()
-        })
+        self.val_metrics_losses = torchmetrics.MetricCollection(
+            {
+                'val/loss': torchmetrics.MeanMetric(),
+                'val/loss_eCLIP': torchmetrics.MeanMetric(),
+                'val/loss_SMI': torchmetrics.MeanMetric(),
+                'val/loss_penalty': torchmetrics.MeanMetric(),
+                'val/mix_coeff': torchmetrics.MeanMetric(),
+                'val/mix_coeff_std-over-exp': torchmetrics.MeanMetric(),
+                'val/mix_coeff_std-over-batch': torchmetrics.MeanMetric(),
+            }
+        )
+        self.val_metrics_eCLIP = torchmetrics.MetricCollection(
+            {'val/' + name + '_eCLIP': metric() for name, metric in metrics.items()}
+        )
         if self.use_control:
-            self.val_metrics_SMI = torchmetrics.MetricCollection({
-                'val/' + name + '_SMI': metric() for name, metric in metrics.items()
-            })
+            self.val_metrics_SMI = torchmetrics.MetricCollection(
+                {'val/' + name + '_SMI': metric() for name, metric in metrics.items()}
+            )
 
         # self.metrics = nn.ModuleDict(
         #     {

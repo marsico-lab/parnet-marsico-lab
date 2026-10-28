@@ -1,5 +1,3 @@
-import os
-
 import gin
 import torch
 import torch.nn.functional as F
@@ -50,4 +48,3 @@ def sparse_to_dense(indices, values, size):
 
 def export_checkpoint_to_pt(checkpoint_path: str, config_gin: str, model_pt_path: str):
     gin.parse_config_file(config_gin, skip_unknown=True)
-    

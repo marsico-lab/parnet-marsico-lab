@@ -39,13 +39,10 @@ def test_import_does_not_reseed_the_global_rng():
     importing parnet is not the seed-42 state.
     """
     seeded = _run(
-        'from lightning.pytorch import seed_everything; seed_everything(42);'
-        'import random; print(random.random())'
+        'from lightning.pytorch import seed_everything; seed_everything(42);import random; print(random.random())'
     )
     after_import = _run('import random; random.seed(1234); import parnet; print(random.random())')
-    assert after_import != seeded, (
-        'importing parnet reset the global RNG to its own seed; seeding must be explicit'
-    )
+    assert after_import != seeded, 'importing parnet reset the global RNG to its own seed; seeding must be explicit'
 
 
 def test_seeding_is_available_explicitly():
@@ -55,9 +52,5 @@ def test_seeding_is_available_explicitly():
 
 
 def test_tensor_cores_opt_in_still_works():
-    output = _run(
-        'import torch, parnet;'
-        'parnet.use_tensor_cores("high");'
-        'print(torch.get_float32_matmul_precision())'
-    )
+    output = _run('import torch, parnet;parnet.use_tensor_cores("high");print(torch.get_float32_matmul_precision())')
     assert output == 'high'

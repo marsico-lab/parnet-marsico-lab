@@ -7,12 +7,14 @@ import gin
 from transformers import Trainer, TrainingArguments
 import torchmetrics
 
-METRICS = torchmetrics.MetricCollection({
-    'MSE': torchmetrics.MeanSquaredError(),
-    'MAE': torchmetrics.MeanAbsoluteError(),
-    'R2': torchmetrics.R2Score(),
-    # 'Pearson': torchmetrics.PearsonCorrCoef(),
-})
+METRICS = torchmetrics.MetricCollection(
+    {
+        'MSE': torchmetrics.MeanSquaredError(),
+        'MAE': torchmetrics.MeanAbsoluteError(),
+        'R2': torchmetrics.R2Score(),
+        # 'Pearson': torchmetrics.PearsonCorrCoef(),
+    }
+)
 
 from tomix.modeling import TomixModel, TomixConfig
 

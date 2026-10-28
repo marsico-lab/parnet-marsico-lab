@@ -188,14 +188,20 @@ def check_mix_compatibility(mix_layer, required, rule, *, strict=True):
     if got is None or got == required:
         return
     if required == 'unit':
-        why = ('A logit fed to a convex combination makes (1 - w) negative, so the logarithm '
-               'receives a negative argument and the result is NaN.')
+        why = (
+            'A logit fed to a convex combination makes (1 - w) negative, so the logarithm '
+            'receives a negative argument and the result is NaN.'
+        )
     else:
-        why = ('A sigmoid output fed to the log-sum rule is squashed twice, confining the '
-               'effective target weight to (0.5, 0.731).')
-    msg = (f'{type(mix_layer).__name__} emits mix_coeff in range {got!r}, but {rule} requires '
-           f'{required!r}. {why} Pass a matching mix_coeff_layer, or strict_mix=False to '
-           'proceed anyway.')
+        why = (
+            'A sigmoid output fed to the log-sum rule is squashed twice, confining the '
+            'effective target weight to (0.5, 0.731).'
+        )
+    msg = (
+        f'{type(mix_layer).__name__} emits mix_coeff in range {got!r}, but {rule} requires '
+        f'{required!r}. {why} Pass a matching mix_coeff_layer, or strict_mix=False to '
+        'proceed anyway.'
+    )
     if strict:
         raise IncompatibleMixError(msg)
     warnings.warn(msg, UserWarning, stacklevel=3)
@@ -381,7 +387,6 @@ class NewMixCoeffMLP(nn.Module):
         return F.sigmoid(x)
 
 
-
 @gin.configurable()
 class MixCoeffPenalty(_LegacyStateMixin, nn.Module):
     """Mixing coefficient penalty: a directional term plus an optional anti-saturation anchor.
@@ -404,8 +409,6 @@ class MixCoeffPenalty(_LegacyStateMixin, nn.Module):
     def __call__(self, track_target, track_control, mix_coeff):
         # (B, num_tasks) -> (B, num_tasks)
         return mix_coeff * self.factor + self.lambda_anchor * (mix_coeff - 0.5) ** 2
-
-
 
 
 @gin.configurable()
@@ -448,8 +451,7 @@ class AdditiveMix(_LegacyStateMixin, nn.Module):
         check_mix_compatibility(
             self.mix_coeff,
             'unit' if use_maximum_target_control_logprob else 'logit',
-            'AdditiveMix with use_maximum_target_control_logprob='
-            f'{use_maximum_target_control_logprob}',
+            f'AdditiveMix with use_maximum_target_control_logprob={use_maximum_target_control_logprob}',
             strict=strict_mix,
         )
 
@@ -493,9 +495,7 @@ class AdditiveMix(_LegacyStateMixin, nn.Module):
                 + (1 - mix_coeff) * torch.exp(control_logprob - safe_max)
                 + 1e-10  # small constant to avoid numerical issues
             )
-            total_logprob = torch.where(
-                is_both_neg_inf, torch.full_like(total_logprob, float('-inf')), total_logprob
-            )
+            total_logprob = torch.where(is_both_neg_inf, torch.full_like(total_logprob, float('-inf')), total_logprob)
         else:
             total_logprob = torch.logsumexp(
                 torch.stack(

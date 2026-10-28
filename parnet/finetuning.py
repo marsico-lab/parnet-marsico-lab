@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import torch.nn as nn
 
-__all__ = ["trainable_stages", "stage_names", "set_trainable", "describe_trainable"]
+__all__ = ['trainable_stages', 'stage_names', 'set_trainable', 'describe_trainable']
 
 
 def _owns_parameters(module: nn.Module) -> bool:
@@ -35,19 +35,19 @@ def trainable_stages(model: nn.Module) -> list[tuple[str, nn.Module]]:
         so ``unfreeze_last=len(stages)`` is the same as unfreezing the whole backbone.
     """
     stages: list[tuple[str, nn.Module]] = []
-    stem = getattr(model, "stem", None)
+    stem = getattr(model, 'stem', None)
     if stem is not None and _owns_parameters(stem):
-        stages.append(("stem", stem))
-    body = getattr(model, "body", None)
+        stages.append(('stem', stem))
+    body = getattr(model, 'body', None)
     if body is not None:
         for i, block in enumerate(body):
             if _owns_parameters(block):
-                stages.append((f"body.{i}", block))
-    projection = getattr(model, "projection", None)
+                stages.append((f'body.{i}', block))
+    projection = getattr(model, 'projection', None)
     # None (no projection at all) and nn.Identity (a placeholder) both own no parameters,
     # so neither becomes a stage. Only a real projection does.
     if projection is not None and _owns_parameters(projection):
-        stages.append(("projection", projection))
+        stages.append(('projection', projection))
     return stages
 
 
@@ -85,11 +85,11 @@ def set_trainable(
     stages = trainable_stages(model)
     n = len(stages)
     if unfreeze_last < -1:
-        raise ValueError(f"unfreeze_last must be -1, 0 or positive, got {unfreeze_last}")
+        raise ValueError(f'unfreeze_last must be -1, 0 or positive, got {unfreeze_last}')
     if unfreeze_last > n:
         raise ValueError(
-            f"unfreeze_last={unfreeze_last} but this model has {n} trainable backbone "
-            f"stages: {[s for s, _ in stages]}. Pass -1 for all of them."
+            f'unfreeze_last={unfreeze_last} but this model has {n} trainable backbone '
+            f'stages: {[s for s, _ in stages]}. Pass -1 for all of them.'
         )
 
     keep = n if unfreeze_last == -1 else unfreeze_last
@@ -100,15 +100,15 @@ def set_trainable(
         for p in module.parameters(recurse=True):
             p.requires_grad_(requires)
 
-    head_module = getattr(model, "head", None)
+    head_module = getattr(model, 'head', None)
     if head_module is not None:
         for p in head_module.parameters(recurse=True):
             p.requires_grad_(bool(head))
 
     return describe_trainable(model) | {
-        "stages": [name for name, _ in stages],
-        "unfrozen": unfrozen_names,
-        "head_trainable": bool(head) if head_module is not None else None,
+        'stages': [name for name, _ in stages],
+        'unfrozen': unfrozen_names,
+        'head_trainable': bool(head) if head_module is not None else None,
     }
 
 
@@ -116,4 +116,4 @@ def describe_trainable(model: nn.Module) -> dict[str, int]:
     """Parameter counts, as a cheap sanity check after calling :func:`set_trainable`."""
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
-    return {"n_trainable": trainable, "n_frozen": total - trainable, "n_total": total}
+    return {'n_trainable': trainable, 'n_frozen': total - trainable, 'n_total': total}

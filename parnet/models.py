@@ -1,6 +1,3 @@
-import logging
-
-import tqdm
 import gin
 import torch
 import torch.nn as nn
@@ -65,8 +62,14 @@ class RBPNet(_LegacyStateMixin, nn.Module):
         # number of parameters.
         _ = self(torch.zeros(2, 4, 100, dtype=torch.float32))
 
-    def forward(self, sequence: torch.Tensor = None, to_probs=False, *, input_ids: torch.Tensor = None,
-                attention_mask: torch.Tensor = None) -> dict[str, torch.Tensor]:
+    def forward(
+        self,
+        sequence: torch.Tensor = None,
+        to_probs=False,
+        *,
+        input_ids: torch.Tensor = None,
+        attention_mask: torch.Tensor = None,
+    ) -> dict[str, torch.Tensor]:
         """Performs a forward pass through the model, returning logits for each postion and task.
 
         Args:
