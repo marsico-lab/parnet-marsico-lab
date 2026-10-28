@@ -131,3 +131,11 @@ def test_differs_from_legacy_exactly_where_legacy_was_wrong(tok):
         new = ids_to_onehot(RnaTokenizer(warn_on_lowercase=False)([seq])['input_ids'])[0]
         assert not torch.equal(new, old)
         assert new.sum() > old.sum()  # the old path lost information
+
+
+def test_to_onehot_is_a_tokenizer_method():
+    """encode, decode and to_onehot are the three steps, on one object."""
+    tok = RnaTokenizer()
+    ids = tok(['ACGU'])['input_ids']
+    assert torch.equal(tok.to_onehot(ids), ids_to_onehot(ids))
+    assert tok.to_onehot(ids).shape == (1, 4, 4)

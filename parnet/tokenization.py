@@ -197,6 +197,24 @@ class RnaTokenizer:
             raise TokenizationError(f'id {error.args[0]} is not in the vocabulary') from None
         return ''.join(chars) if keep_padding else ''.join(c for c in chars if c != '-')
 
+    def to_onehot(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """Convert ids to the ``(B, 4, L)`` one-hot the model consumes.
+
+        The third of the three steps, alongside :meth:`encode` and :meth:`decode`. This is
+        where ``N`` and padding stop being distinguishable, since both become the all-zero
+        column; read anything you need off the ids first.
+
+        Args:
+            input_ids: Ids of shape ``(batch, length)``.
+
+        Returns:
+            Float one-hot of shape ``(batch, 4, length)``.
+
+        Raises:
+            TokenizationError: If ``input_ids`` is not 2-D.
+        """
+        return ids_to_onehot(input_ids)
+
 
 def ids_to_onehot(input_ids: torch.Tensor) -> torch.Tensor:
     """Convert ``(B, L)`` integer ids to the ``(B, 4, L)`` float one-hot the model consumes.
