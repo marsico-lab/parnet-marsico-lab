@@ -1,10 +1,43 @@
+import functools
+import warnings
+
 import captum
 import gin
 import torch
 import torch.nn as nn
 
-from parnet.layers import AdditiveMix, ResConvBlock1D, StemConv1D, _LegacyStateMixin
+from parnet.layers import ResConvBlock1D, StemConv1D, TargetControlMix, _LegacyStateMixin
 from parnet.utils import sequence_to_onehot
+
+
+def _deprecated_from_sequence(replacement: str):
+    """Mark a convenience method that takes raw strings as deprecated.
+
+    These methods route through :func:`parnet.utils.sequence_to_onehot`, which turns a
+    lowercase sequence into an all-zero tensor and then returns a confident prediction from
+    it. That is not fixable without changing what the method accepts, so the method goes
+    instead: the tokenizer raises on the same input. The warning names the replacement
+    rather than only the problem, because a deprecation nobody can act on is noise.
+    """
+
+    def decorate(method):
+        @functools.wraps(method)
+        def wrapper(self, *args, **kwargs):
+            warnings.warn(
+                f'{method.__name__} is deprecated and will be removed at 1.0. Tokenize '
+                f'explicitly instead:\n'
+                f'    encoded = RnaTokenizer()(sequences)\n'
+                f'    {replacement}\n'
+                f'Until it is removed this method still silently accepts a lowercase '
+                f'sequence as all-N and returns a confident prediction for it.',
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return method(self, *args, **kwargs)
+
+        return wrapper
+
+    return decorate
 
 
 @gin.configurable()
@@ -18,7 +51,7 @@ class RBPNet(_LegacyStateMixin, nn.Module):
         dilation: int = 1.75,
         stem_layer: nn.Module = StemConv1D,
         body_layer: nn.Module = ResConvBlock1D,
-        head_layer: nn.Module = AdditiveMix,
+        head_layer: nn.Module = TargetControlMix,
         embedding_dim: int = 128,
         use_projection: bool = True,
     ):
@@ -139,6 +172,7 @@ class RBPNet(_LegacyStateMixin, nn.Module):
 
         return _save_pretrained(self, stem, name=name, extra=extra)
 
+    @_deprecated_from_sequence('model(**encoded)')
     def predict_from_sequence(self, sequences: str | list[str], to_probs=False):
         """Predicts RBP binding probabilities from a sequence.
 
@@ -183,6 +217,7 @@ class RBPNet(_LegacyStateMixin, nn.Module):
         else:
             raise ValueError('aggregation must be one of "mean", "center" or None.')
 
+    @_deprecated_from_sequence("model.embed(encoded['input_ids'])")
     def embed_from_sequence(self, sequences: str | list[str], aggregation: str = None):
         if isinstance(sequences, str):
             sequences = [sequences]

@@ -138,14 +138,14 @@ class IncompatibleMixError(TypeError):
     ``"logit"``
         An unbounded real number, added to the target log-probability in log space, so the
         effective target weight is ``sigmoid(mix_coeff)``. Emitted by
-        :class:`SequenceLinearMix`; consumed by the log-sum branch of :class:`AdditiveMix`
+        :class:`PooledLogitMixCoeff`; consumed by the log-sum branch of :class:`TargetControlMix`
         (``use_maximum_target_control_logprob=False``).
 
     ``"unit"``
         A probability in [0, 1], used directly as the weight in a convex combination
-        ``w * exp(target) + (1 - w) * exp(control)``. Emitted by :class:`MixCoeffMLP` and
-        :class:`NewMixCoeffMLP`, which end in a sigmoid; consumed by
-        :class:`NewAdditiveMix` and by the max-logprob branch of :class:`AdditiveMix`.
+        ``w * exp(target) + (1 - w) * exp(control)``. Emitted by :class:`PooledProbMixCoeff` and
+        :class:`PooledProbMixCoeffV2`, which end in a sigmoid; consumed by
+        :class:`ConvexTargetControlMix` and by the max-logprob branch of :class:`TargetControlMix`.
 
     The two failure modes this prevents, both observed in practice:
 
@@ -158,15 +158,15 @@ class IncompatibleMixError(TypeError):
       a log-space weight, so the effective target weight becomes
       ``sigmoid(sigmoid(logit))``, confined to (0.5, 0.731). The control track can then
       never fall below 26.9 per cent and the penalty saturates. This is what
-      :class:`AdditiveMix`'s own default arguments produce.
+      :class:`TargetControlMix`'s own default arguments produce.
     """
 
 
 #: Output range declared by each known mix-coefficient layer.
 MIX_COEFF_RANGES = {
-    'SequenceLinearMix': 'logit',
-    'MixCoeffMLP': 'unit',
-    'NewMixCoeffMLP': 'unit',
+    'PooledLogitMixCoeff': 'logit',
+    'PooledProbMixCoeff': 'unit',
+    'PooledProbMixCoeffV2': 'unit',
 }
 
 
@@ -215,17 +215,17 @@ def check_mix_compatibility(mix_layer, required, rule, *, strict=True):
 #: original semantics rather than imposing today's default.
 #:
 #: Three have been hit in practice on released files:
-#:   MixCoeffPenalty.lambda_anchor                      (3M and 7M checkpoints)
-#:   AdditiveMix.use_maximum_target_control_logprob     (released 21M)
-#:   AdditiveMix.control_nograd                         (released 21M)
+#:   MixCoeffPenalty.anchor_strength                      (3M and 7M checkpoints)
+#:   TargetControlMix.use_maximum_target_control_logprob     (released 21M)
+#:   TargetControlMix.control_nograd                         (released 21M)
 _LEGACY_ATTRIBUTE_DEFAULTS = {
-    'AdditiveMix': {
+    'TargetControlMix': {
         # The log-sum branch was the only behaviour before the flag existed.
         'use_maximum_target_control_logprob': False,
         # Gradients flowed through the control track before this switch was added.
         'control_nograd': False,
     },
-    'NewAdditiveMix': {
+    'ConvexTargetControlMix': {
         'control_nograd': False,
     },
     'RBPNet': {
@@ -237,12 +237,16 @@ _LEGACY_ATTRIBUTE_DEFAULTS = {
         # identically once this default is filled in.
         'projection': None,
     },
+    'PooledLogitMixCoeff': {
+        # Added 2026-10. Every released checkpoint predates it and used no activation.
+        'activation': None,
+    },
     'MixCoeffPenalty': {
         # Documented as a no-op default matching prior behaviour.
-        'lambda_anchor': 0.0,
+        'anchor_strength': 0.0,
     },
     'NewMixCoeffPenalty': {
-        'lambda_anchor': 0.0,
+        'anchor_strength': 0.0,
     },
 }
 
@@ -304,15 +308,39 @@ def _require_target_weight(target_weight, mix_layer):
 
 
 @gin.configurable()
-class SequenceLinearMix(nn.Module):
-    #: Output range of ``forward``; see :class:`IncompatibleMixError`.
+def _mix_coeff_range_for(activation) -> str:
+    """Which coefficient range an output activation produces.
+
+    Only the cases we can state are allowed. Guessing would feed a wrong range to the
+    compatibility guard, which is the one thing that guard exists to prevent.
+    """
+    if activation is None:
+        return 'logit'
+    if isinstance(activation, nn.Sigmoid):
+        return 'unit'
+    raise IncompatibleMixError(
+        f'cannot infer the output range of {type(activation).__name__}. Pass None for a raw '
+        'logit or nn.Sigmoid() for a unit-range coefficient; any other activation needs its '
+        'range stated here before it can be used as a mix coefficient.'
+    )
+
+
+class PooledLogitMixCoeff(nn.Module):
+    #: Range when no activation is given. Instances override it, because the range follows
+    #: the activation. Both are recorded in the config: an activation that is not written
+    #: down gets rebuilt as the default, which is how the 3M backbones were once rebuilt
+    #: with ReLU where they had been trained with GELU.
     mix_coeff_range = 'logit'
 
-    def __init__(self, num_tasks):
+    def __init__(self, num_tasks, activation=None):
         super().__init__()
 
         self.gloabel_avg_pool = nn.AdaptiveAvgPool1d(1)
         self.dense = nn.LazyLinear(num_tasks)
+        # Without this the layer welds depth to range: a bounded coefficient could only be
+        # had by moving to the two-layer MLP. None reproduces the released 21M exactly.
+        self.activation = activation
+        self.mix_coeff_range = _mix_coeff_range_for(activation)
 
     def forward(self, inputs):
         # inputs should have shape [batch, hidden_dim, length]
@@ -328,11 +356,14 @@ class SequenceLinearMix(nn.Module):
         x = self.dense(x)  # --> [batch, num_tasks]
         logging.debug(f'self.dense(x): {x.shape}')
 
-        return x
+        # getattr, not self.activation: checkpoints pickled before 2026-10 have no such
+        # attribute, and __setstate__ fills it only for classes listed in the legacy table.
+        activation = getattr(self, 'activation', None)
+        return x if activation is None else activation(x)
 
 
 @gin.configurable()
-class MixCoeffMLP(nn.Module):
+class PooledProbMixCoeff(nn.Module):
     #: Output range of ``forward``; see :class:`IncompatibleMixError`.
     mix_coeff_range = 'unit'
 
@@ -361,7 +392,7 @@ class MixCoeffMLP(nn.Module):
 
 
 @gin.configurable()
-class NewMixCoeffMLP(nn.Module):
+class PooledProbMixCoeffV2(nn.Module):
     #: Output range of ``forward``; see :class:`IncompatibleMixError`.
     mix_coeff_range = 'unit'
 
@@ -394,25 +425,25 @@ class MixCoeffPenalty(_LegacyStateMixin, nn.Module):
     `factor` encourages a lower mixing coefficient, i.e. more contribution from the control
     track -- this is the original, directional penalty, and is a no-op at `factor=0`.
 
-    `lambda_anchor` is a separate, non-directional term: `lambda_anchor * (mix_coeff - 0.5)**2`,
+    `anchor_strength` is a separate, non-directional term: `anchor_strength * (mix_coeff - 0.5)**2`,
     always active regardless of `factor`, pulling mix_coeff away from full saturation at 0 or 1
     in either direction. Added to address mix_coeff collapsing to the extremes even at
     `factor=0`, observed in head-only fine-tunes with `use_maximum_target_control_logprob=True`
     (nothing else constrains mix_coeff there). Defaults to 0.0 (no-op, matches prior behavior).
     """
 
-    def __init__(self, factor=1.0, lambda_anchor=0.0) -> None:
+    def __init__(self, factor=1.0, anchor_strength=0.0) -> None:
         super().__init__()
         self.factor = factor
-        self.lambda_anchor = lambda_anchor
+        self.anchor_strength = anchor_strength
 
     def __call__(self, track_target, track_control, mix_coeff):
         # (B, num_tasks) -> (B, num_tasks)
-        return mix_coeff * self.factor + self.lambda_anchor * (mix_coeff - 0.5) ** 2
+        return mix_coeff * self.factor + self.anchor_strength * (mix_coeff - 0.5) ** 2
 
 
 @gin.configurable()
-class AdditiveMix(_LegacyStateMixin, nn.Module):
+class TargetControlMix(_LegacyStateMixin, nn.Module):
     """Additive mixing of target and control tracks.
 
     This layer takes a nucleotide-wise embedding, projects it to logits for the target and control tracks for a
@@ -424,18 +455,18 @@ class AdditiveMix(_LegacyStateMixin, nn.Module):
         self,
         num_tasks,
         head_layer=LinearProjectionHead,
-        mix_coeff_layer=MixCoeffMLP,
+        mix_coeff_layer=PooledProbMixCoeff,
         penalty_layer=None,
         control_nograd=False,
         use_maximum_target_control_logprob=False,
         strict_mix=True,
     ):
-        """Initializes AdditiveMix layer.
+        """Initializes TargetControlMix layer.
 
         Args:
             num_tasks (int): Number of tasks (i.e. eCLIP tracks).
             head_layer (nn.Module, optional): Layer to use for the output head. Defaults to LinearProjectionHead.
-            mix_coeff_layer (nn.Module, optional): Layer to use for predicting mixing coefficients. Defaults to MixCoeffMLP.
+            mix_coeff_layer (nn.Module, optional): Layer to use for predicting mixing coefficients. Defaults to PooledProbMixCoeff.
             penalty_layer (nn.Module, optional): Layer to compute additional penalty added to the loss. Defaults to MixCoeffPenalty.
         """
         super().__init__()
@@ -451,7 +482,7 @@ class AdditiveMix(_LegacyStateMixin, nn.Module):
         check_mix_compatibility(
             self.mix_coeff,
             'unit' if use_maximum_target_control_logprob else 'logit',
-            f'AdditiveMix with use_maximum_target_control_logprob={use_maximum_target_control_logprob}',
+            f'TargetControlMix with use_maximum_target_control_logprob={use_maximum_target_control_logprob}',
             strict=strict_mix,
         )
 
@@ -562,12 +593,12 @@ class NewMixCoeffPenalty(_LegacyStateMixin, nn.Module):
 
 
 @gin.configurable()
-class NewAdditiveMix(_LegacyStateMixin, nn.Module):
+class ConvexTargetControlMix(_LegacyStateMixin, nn.Module):
     def __init__(
         self,
         num_tasks,
         head_layer=LinearProjection,
-        mix_coeff_layer=NewMixCoeffMLP,
+        mix_coeff_layer=PooledProbMixCoeffV2,
         penalty_layer=None,
         control_nograd=False,
         strict_mix=True,
@@ -580,7 +611,7 @@ class NewAdditiveMix(_LegacyStateMixin, nn.Module):
         self.penalty = penalty_layer
         self.control_nograd = control_nograd
         # Always a convex combination, so always a weight in [0, 1].
-        check_mix_compatibility(self.mix_coeff, 'unit', 'NewAdditiveMix', strict=strict_mix)
+        check_mix_compatibility(self.mix_coeff, 'unit', 'ConvexTargetControlMix', strict=strict_mix)
 
     def forward(self, inputs, **kwargs):
         # inputs should have shape [batch, hidden_dim, length]
@@ -634,3 +665,35 @@ class NewAdditiveMix(_LegacyStateMixin, nn.Module):
             )
 
         return return_dict
+
+
+#: Names these classes had before the 2026-10 rename. The old names said how the layer was
+#: built ("additive", "a linear on the sequence"); the new ones say what it computes and
+#: what it emits, which is the distinction that actually bit us: the combination rule and
+#: the coefficient's range are independent axes, and the old names conflated them.
+#:
+#: Resolution goes through ``__getattr__`` rather than plain assignments so that an old
+#: name warns, while still resolving for ``torch.load`` on a pickled checkpoint, which
+#: looks attributes up on the module in exactly this way.
+_RENAMED_IN_2026_10 = {
+    'AdditiveMix': 'TargetControlMix',
+    'NewAdditiveMix': 'ConvexTargetControlMix',
+    'SequenceLinearMix': 'PooledLogitMixCoeff',
+    'MixCoeffMLP': 'PooledProbMixCoeff',
+    'NewMixCoeffMLP': 'PooledProbMixCoeffV2',
+}
+
+
+def __getattr__(name: str):
+    """Resolve a pre-rename class name, with a warning."""
+    if name in _RENAMED_IN_2026_10:
+        new = _RENAMED_IN_2026_10[name]
+        warnings.warn(
+            f'parnet.layers.{name} was renamed to {new} in 2026-10 and the old name will '
+            f'be removed at 1.0. Behaviour is unchanged. Pickled checkpoints that still '
+            f'name {name} keep loading; re-export them to drop the alias.',
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return globals()[new]
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')

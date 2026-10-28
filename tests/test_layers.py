@@ -1,12 +1,12 @@
 import torch
 
-from parnet.layers import AdditiveMix, LambdaLayer, MixCoeffPenalty, NewAdditiveMix
+from parnet.layers import ConvexTargetControlMix, LambdaLayer, MixCoeffPenalty, TargetControlMix
 
 
-def test_NewAdditiveMix():
+def test_ConvexTargetControlMix():
     # Prepare mix-coeff layer. Provide a constant mixing coefficient and later overwrite the target/control head layers,
     # so that we can return fixed logit-tensors.
-    layer = NewAdditiveMix(num_tasks=2)
+    layer = ConvexTargetControlMix(num_tasks=2)
 
     # Prepare inputs. We provide log-probs as logits, as they are easily generated from probs.
     layer.head_target = LambdaLayer(lambda _: torch.tensor([[0.1, 0.5, 0.4], [0.2, 0.3, 0.5]]).log().unsqueeze(0))
@@ -21,14 +21,14 @@ def test_NewAdditiveMix():
 
 def _additive_mix_with_fixed_logits(target_probs, control_probs, mix_coeffs, use_maximum_target_control_logprob):
     num_tasks = target_probs.shape[0]
-    layer = AdditiveMix(num_tasks=num_tasks, use_maximum_target_control_logprob=use_maximum_target_control_logprob)
+    layer = TargetControlMix(num_tasks=num_tasks, use_maximum_target_control_logprob=use_maximum_target_control_logprob)
     layer.head_target = LambdaLayer(lambda _: target_probs.log().unsqueeze(0))
     layer.head_control = LambdaLayer(lambda _: control_probs.log().unsqueeze(0))
     layer.mix_coeff = LambdaLayer(lambda _: mix_coeffs.unsqueeze(0))
     return layer
 
 
-def test_AdditiveMix_max_logprob_matches_linear_mixing_reference():
+def test_TargetControlMix_max_logprob_matches_linear_mixing_reference():
     # use_maximum_target_control_logprob=True mixes target/control PROBABILITIES
     # linearly (mix_coeff * p_target + (1 - mix_coeff) * p_control), unlike the default
     # branch (which mixes additively in log-space) -- for ordinary, non-degenerate
@@ -45,7 +45,7 @@ def test_AdditiveMix_max_logprob_matches_linear_mixing_reference():
     assert torch.allclose(total_prob, expected, atol=1e-4)
 
 
-def test_AdditiveMix_max_logprob_handles_double_neg_inf_without_nan():
+def test_TargetControlMix_max_logprob_handles_double_neg_inf_without_nan():
     # Regression test for the "Logits contain NaN or Inf values." crash. In production
     # this -inf comes from log_softmax(target_logit)/(control_logit) underflowing at a
     # position far from a confidently-predicted peak (more likely in float16, and more
@@ -56,7 +56,7 @@ def test_AdditiveMix_max_logprob_handles_double_neg_inf_without_nan():
     target_logit = torch.tensor([[0.0, 1.0, float('-inf')]])  # (num_tasks=1, L=3)
     control_logit = torch.tensor([[0.5, -0.5, float('-inf')]])
 
-    layer = AdditiveMix(num_tasks=1, use_maximum_target_control_logprob=True)
+    layer = TargetControlMix(num_tasks=1, use_maximum_target_control_logprob=True)
     layer.head_target = LambdaLayer(lambda _: target_logit.unsqueeze(0))  # -> (B=1, num_tasks=1, L=3)
     layer.head_control = LambdaLayer(lambda _: control_logit.unsqueeze(0))
     layer.mix_coeff = LambdaLayer(lambda _: torch.tensor([0.5]).unsqueeze(0))
@@ -70,19 +70,19 @@ def test_AdditiveMix_max_logprob_handles_double_neg_inf_without_nan():
     assert torch.isfinite(output['total'][0, 0, 1])
 
 
-def test_MixCoeffPenalty_default_lambda_anchor_is_a_no_op():
-    # lambda_anchor defaults to 0.0 -- must reproduce the original factor-only behavior
+def test_MixCoeffPenalty_default_anchor_strength_is_a_no_op():
+    # anchor_strength defaults to 0.0 -- must reproduce the original factor-only behavior
     # exactly, so no existing checkpoint's training run is affected retroactively.
     penalty = MixCoeffPenalty(factor=2.0)
     mix_coeff = torch.tensor([0.0, 0.5, 1.0])
     assert torch.allclose(penalty(None, None, mix_coeff), mix_coeff * 2.0)
 
 
-def test_MixCoeffPenalty_lambda_anchor_penalizes_saturation_symmetrically():
-    # The anchor term is (mix_coeff - 0.5)**2, scaled by lambda_anchor -- zero at 0.5,
+def test_MixCoeffPenalty_anchor_strength_penalizes_saturation_symmetrically():
+    # The anchor term is (mix_coeff - 0.5)**2, scaled by anchor_strength -- zero at 0.5,
     # equal and maximal at both mix_coeff=0.0 and mix_coeff=1.0 (symmetric, unlike the
     # directional `factor` term which only discourages high mix_coeff).
-    penalty = MixCoeffPenalty(factor=0.0, lambda_anchor=1.0)
+    penalty = MixCoeffPenalty(factor=0.0, anchor_strength=1.0)
     mix_coeff = torch.tensor([0.0, 0.5, 1.0])
     output = penalty(None, None, mix_coeff)
     expected = torch.tensor([0.25, 0.0, 0.25])

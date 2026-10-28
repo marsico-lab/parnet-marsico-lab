@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class _Strict(BaseModel):
@@ -76,7 +76,15 @@ class ArchitectureConfig(_Strict):
     control_nograd: bool
     penalty_class: str | None = None
     penalty_factor: float | None = None
-    lambda_anchor: float | None = None
+    # Written as 'lambda_anchor' before the 2026-10 rename. Configs are data written in
+    # the past, so the old key is still read; what it is called today is a separate
+    # question from whether a file from last month can be loaded. Re-exporting writes the
+    # new name. The rename happened because the paper already calls the penalty factor
+    # lambda, and a second lambda in the code read as the same quantity.
+    anchor_strength: float | None = Field(
+        default=None,
+        validation_alias=AliasChoices('anchor_strength', 'lambda_anchor'),
+    )
     n_parameters: int
     n_tasks: int
 

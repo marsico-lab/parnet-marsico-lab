@@ -46,13 +46,13 @@ parnet.layers.ResConvBlock1D.filters = 512
 parnet.layers.StemConv1D.filters = 512
 
 
-parnet.models.RBPNet.head_layer = @parnet.layers.AdditiveMix
-parnet.layers.AdditiveMix.mix_coeff_layer = @parnet.layers.MixCoeffMLP
+parnet.models.RBPNet.head_layer = @parnet.layers.TargetControlMix
+parnet.layers.TargetControlMix.mix_coeff_layer = @parnet.layers.PooledProbMixCoeff
 
-parnet.layers.MixCoeffMLP.units = 256
+parnet.layers.PooledProbMixCoeff.units = 256
 
 # --------------- #
 # --- Penalty --- #
 # --------------- #
-# parnet.layers.AdditiveMix.penalty_layer = @parnet.layers.MixCoeffPenalty
+# parnet.layers.TargetControlMix.penalty_layer = @parnet.layers.MixCoeffPenalty
 # parnet.layers.MixCoeffPenalty.factor = 0.0

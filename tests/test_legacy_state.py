@@ -6,9 +6,9 @@ surfaces as an AttributeError from inside forward rather than at load time. Thes
 simulate older checkpoints by deleting the attributes and re-running __setstate__.
 
 Three such attributes have been hit on real released files:
-  MixCoeffPenalty.lambda_anchor                   on 3M and 7M checkpoints
-  AdditiveMix.use_maximum_target_control_logprob  on the released 21M
-  AdditiveMix.control_nograd                      on the released 21M
+  MixCoeffPenalty.anchor_strength                   on 3M and 7M checkpoints
+  TargetControlMix.use_maximum_target_control_logprob  on the released 21M
+  TargetControlMix.control_nograd                      on the released 21M
 and the released 21M has no `projection` attribute at all, while the 7M has one holding
 None and the 3M has one holding nn.Identity.
 """
@@ -20,10 +20,10 @@ import torch.nn as nn
 
 from parnet.layers import (
     _LEGACY_ATTRIBUTE_DEFAULTS,
-    AdditiveMix,
+    ConvexTargetControlMix,
     MixCoeffPenalty,
-    NewAdditiveMix,
-    SequenceLinearMix,
+    PooledLogitMixCoeff,
+    TargetControlMix,
 )
 from parnet.models import RBPNet
 
@@ -47,33 +47,33 @@ def _roundtrip_without(obj, *attrs):
 
 
 def test_additivemix_regains_control_nograd():
-    m = AdditiveMix(4, mix_coeff_layer=SequenceLinearMix)
+    m = TargetControlMix(4, mix_coeff_layer=PooledLogitMixCoeff)
     back = _roundtrip_without(m, 'control_nograd')
     assert back.control_nograd is False
 
 
 def test_additivemix_regains_the_mixing_flag():
-    m = AdditiveMix(4, mix_coeff_layer=SequenceLinearMix)
+    m = TargetControlMix(4, mix_coeff_layer=PooledLogitMixCoeff)
     back = _roundtrip_without(m, 'use_maximum_target_control_logprob')
     # False is the log-sum branch, the only behaviour before the flag existed
     assert back.use_maximum_target_control_logprob is False
 
 
-def test_penalty_regains_lambda_anchor():
+def test_penalty_regains_anchor_strength():
     p = MixCoeffPenalty(factor=5.0)
-    back = _roundtrip_without(p, 'lambda_anchor')
-    assert back.lambda_anchor == 0.0
+    back = _roundtrip_without(p, 'anchor_strength')
+    assert back.anchor_strength == 0.0
     assert back.factor == 5.0  # the attribute that was there is untouched
 
 
 def test_newadditivemix_regains_control_nograd():
-    m = NewAdditiveMix(4)
+    m = ConvexTargetControlMix(4)
     back = _roundtrip_without(m, 'control_nograd')
     assert back.control_nograd is False
 
 
 def test_existing_values_are_never_overwritten():
-    m = AdditiveMix(4, mix_coeff_layer=SequenceLinearMix, control_nograd=True)
+    m = TargetControlMix(4, mix_coeff_layer=PooledLogitMixCoeff, control_nograd=True)
     back = pickle.loads(pickle.dumps(m))
     assert back.control_nograd is True  # not reset to the default
 
@@ -88,7 +88,7 @@ def _tiny_model(use_projection=False):
         num_tasks=4,
         layers=1,
         use_projection=use_projection,
-        head_layer=lambda n: AdditiveMix(n, mix_coeff_layer=SequenceLinearMix),
+        head_layer=lambda n: TargetControlMix(n, mix_coeff_layer=PooledLogitMixCoeff),
     )
 
 

@@ -39,14 +39,20 @@ CLASS_REGISTRY: dict[str, type] = {
     'ResConvBlock1D': _layers.ResConvBlock1D,
     'LinearProjectionHead': _layers.LinearProjectionHead,
     'LinearProjection': _layers.LinearProjection,
-    'SequenceLinearMix': _layers.SequenceLinearMix,
-    'MixCoeffMLP': _layers.MixCoeffMLP,
-    'NewMixCoeffMLP': _layers.NewMixCoeffMLP,
+    'PooledLogitMixCoeff': _layers.PooledLogitMixCoeff,
+    'PooledProbMixCoeff': _layers.PooledProbMixCoeff,
+    'PooledProbMixCoeffV2': _layers.PooledProbMixCoeffV2,
     'MixCoeffPenalty': _layers.MixCoeffPenalty,
     'NewMixCoeffPenalty': _layers.NewMixCoeffPenalty,
-    'AdditiveMix': _layers.AdditiveMix,
-    'NewAdditiveMix': _layers.NewAdditiveMix,
+    'TargetControlMix': _layers.TargetControlMix,
+    'ConvexTargetControlMix': _layers.ConvexTargetControlMix,
 }
+
+# Configs written before the 2026-10 rename name the old classes. They resolve to the
+# same objects, so an already-exported model keeps loading without being rewritten.
+# Reading one does NOT warn: a config is a file, not a call site, and nobody can act on
+# a warning raised while loading someone else's checkpoint. Re-exporting rewrites them.
+CLASS_REGISTRY.update({old: CLASS_REGISTRY[new] for old, new in _layers._RENAMED_IN_2026_10.items()})
 
 #: Activation classes that may be named in a config. Activations are NOT parameters, so
 #: ``load_state_dict`` restores weights perfectly while silently leaving the wrong
@@ -70,6 +76,15 @@ WEIGHTS_SUFFIX = '.safetensors'
 
 class ConfigWeightMismatch(ValueError):
     """Raised when ``config.json`` claims something the weights contradict."""
+
+
+def _mix_coeff_activation_name(mix) -> str | None:
+    """Name of the mix-coefficient layer's output activation, under either spelling."""
+    for attribute in ('act', 'activation'):
+        value = getattr(mix, attribute, None)
+        if value is not None:
+            return type(value).__name__
+    return None
 
 
 def _resolve_activation(name: str | None) -> nn.Module | None:
@@ -163,7 +178,9 @@ def describe(model: nn.Module) -> dict[str, Any]:
             'dilations': [int(block.conv1d.dilation[0]) for block in model.body],
         },
         'mix_coeff_units': int(mix.dense1.weight.shape[0]) if hasattr(mix, 'dense1') else None,
-        'mix_coeff_activation': type(mix.act).__name__ if hasattr(mix, 'act') else None,
+        # The MLPs spell it 'act', PooledLogitMixCoeff spells it 'activation'. Both are the
+        # output nonlinearity, and neither is a parameter, so both must be recorded here.
+        'mix_coeff_activation': _mix_coeff_activation_name(mix),
         'head_class': type(head).__name__,
         'mix_coeff_class': type(mix).__name__,
         'mix_coeff_range': getattr(type(mix), 'mix_coeff_range', None),
@@ -172,7 +189,7 @@ def describe(model: nn.Module) -> dict[str, Any]:
         'control_nograd': bool(getattr(head, 'control_nograd', False)),
         'penalty_class': type(penalty).__name__ if penalty is not None else None,
         'penalty_factor': float(penalty.factor) if penalty is not None else None,
-        'lambda_anchor': float(getattr(penalty, 'lambda_anchor', 0.0)) if penalty is not None else None,
+        'anchor_strength': float(getattr(penalty, 'anchor_strength', 0.0)) if penalty is not None else None,
         'n_parameters': sum(p.numel() for p in model.parameters()),
         'n_tasks': int(conv.weight.shape[0]),
     }
@@ -240,17 +257,18 @@ def build_from_config(arch: dict[str, Any]):
     penalty_layer = None
     if penalty_cls is not None:
         penalty_kwargs: dict[str, Any] = {'factor': arch.get('penalty_factor') or 0.0}
-        if arch.get('lambda_anchor') is not None and penalty_cls is _layers.MixCoeffPenalty:
-            penalty_kwargs['lambda_anchor'] = arch['lambda_anchor']
+        if arch.get('anchor_strength') is not None and penalty_cls is _layers.MixCoeffPenalty:
+            penalty_kwargs['anchor_strength'] = arch['anchor_strength']
         penalty_layer = functools.partial(penalty_cls, **penalty_kwargs)
 
-    # MixCoeffMLP / NewMixCoeffMLP carry their own width and activation, neither of which
+    # PooledProbMixCoeff / PooledProbMixCoeffV2 carry their own width and activation, neither of which
     # is a parameter of the saved state dict.
     mix_kwargs: dict[str, Any] = {}
     if arch.get('mix_coeff_units') is not None:
         mix_kwargs['units'] = arch['mix_coeff_units']
     if arch.get('mix_coeff_activation') is not None:
-        mix_kwargs['act'] = _resolve_activation(arch['mix_coeff_activation'])
+        keyword = 'activation' if mix_cls is _layers.PooledLogitMixCoeff else 'act'
+        mix_kwargs[keyword] = _resolve_activation(arch['mix_coeff_activation'])
     mix_layer = functools.partial(mix_cls, **mix_kwargs) if mix_kwargs else mix_cls
 
     head_kwargs: dict[str, Any] = {
@@ -259,7 +277,7 @@ def build_from_config(arch: dict[str, Any]):
         'penalty_layer': penalty_layer,
         'control_nograd': arch.get('control_nograd', False),
     }
-    if head_cls is _layers.AdditiveMix:
+    if head_cls is _layers.TargetControlMix:
         head_kwargs['use_maximum_target_control_logprob'] = arch.get('use_maximum_target_control_logprob', False)
 
     # The stem's filter count sets the width of the whole residual stream, so it has to be

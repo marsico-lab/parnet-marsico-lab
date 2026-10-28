@@ -20,8 +20,8 @@ from parnet.pretrained import (
 def _small_model(use_projection=False, num_tasks=3, bounded=True):
     """A deliberately tiny RBPNet so the suite stays fast.
 
-    The head is specified explicitly rather than left to AdditiveMix's defaults, because
-    those defaults are themselves an incompatible pair: MixCoeffMLP emits a bounded
+    The head is specified explicitly rather than left to TargetControlMix's defaults, because
+    those defaults are themselves an incompatible pair: PooledProbMixCoeff emits a bounded
     coefficient while use_maximum_target_control_logprob=False selects the log-sum rule,
     which needs a logit. Constructing one now raises IncompatibleMixError, which is the
     intended behaviour and is covered by tests/test_mix_guard.py.
@@ -29,15 +29,15 @@ def _small_model(use_projection=False, num_tasks=3, bounded=True):
     if bounded:
         # bounded coefficient + convex combination (the 7M and 3M pairing)
         head = functools.partial(
-            layers.AdditiveMix,
-            mix_coeff_layer=layers.MixCoeffMLP,
+            layers.TargetControlMix,
+            mix_coeff_layer=layers.PooledProbMixCoeff,
             use_maximum_target_control_logprob=True,
         )
     else:
         # unbounded logit + log-space addition (the released 21M pairing)
         head = functools.partial(
-            layers.AdditiveMix,
-            mix_coeff_layer=layers.SequenceLinearMix,
+            layers.TargetControlMix,
+            mix_coeff_layer=layers.PooledLogitMixCoeff,
             use_maximum_target_control_logprob=False,
         )
     return RBPNet(
@@ -137,8 +137,8 @@ def test_describe_reads_the_model_not_its_arguments():
     model = _small_model(num_tasks=5)
     arch = describe(model)
     assert arch['n_tasks'] == 5
-    assert arch['head_class'] == 'AdditiveMix'
-    assert arch['mix_coeff_class'] in {'MixCoeffMLP', 'NewMixCoeffMLP', 'SequenceLinearMix'}
+    assert arch['head_class'] == 'TargetControlMix'
+    assert arch['mix_coeff_class'] in {'PooledProbMixCoeff', 'PooledProbMixCoeffV2', 'PooledLogitMixCoeff'}
     assert arch['n_parameters'] == sum(p.numel() for p in model.parameters())
 
 
@@ -157,7 +157,7 @@ def test_mix_coeff_range_survives_the_round_trip(tmp_path):
     assert config['architecture']['mix_coeff_range'] == 'logit'
     assert config['architecture']['use_maximum_target_control_logprob'] is False
     reloaded = from_pretrained(tmp_path / 'tiny')
-    assert type(reloaded.head.mix_coeff).__name__ == 'SequenceLinearMix'
+    assert type(reloaded.head.mix_coeff).__name__ == 'PooledLogitMixCoeff'
 
 
 def test_body_width_is_recorded_and_restored(tmp_path):
@@ -175,8 +175,8 @@ def test_body_width_is_recorded_and_restored(tmp_path):
         stem_layer=functools.partial(layers.StemConv1D, filters=48),
         body_layer=functools.partial(layers.ResConvBlock1D, filters=48),
         head_layer=functools.partial(
-            layers.AdditiveMix,
-            mix_coeff_layer=layers.MixCoeffMLP,
+            layers.TargetControlMix,
+            mix_coeff_layer=layers.PooledProbMixCoeff,
             use_maximum_target_control_logprob=True,
         ),
     )
@@ -214,8 +214,8 @@ def test_non_parametric_architecture_survives_the_round_trip(tmp_path):
         stem_layer=functools.partial(layers.StemConv1D, filters=24, activation=torch.nn.GELU()),
         body_layer=functools.partial(layers.ResConvBlock1D, filters=24, activation=torch.nn.GELU()),
         head_layer=functools.partial(
-            layers.AdditiveMix,
-            mix_coeff_layer=functools.partial(layers.MixCoeffMLP, units=32, act=torch.nn.GELU()),
+            layers.TargetControlMix,
+            mix_coeff_layer=functools.partial(layers.PooledProbMixCoeff, units=32, act=torch.nn.GELU()),
             use_maximum_target_control_logprob=True,
         ),
     )
@@ -265,7 +265,7 @@ def test_embed_works_when_projection_is_none():
         embedding_dim=16,
         use_projection=False,
         head_layer=functools.partial(
-            layers.AdditiveMix, mix_coeff_layer=layers.MixCoeffMLP, use_maximum_target_control_logprob=True
+            layers.TargetControlMix, mix_coeff_layer=layers.PooledProbMixCoeff, use_maximum_target_control_logprob=True
         ),
     )
     model.eval()
@@ -293,7 +293,7 @@ def test_embedding_width_matches_what_the_head_receives():
         stem_layer=functools.partial(layers.StemConv1D, filters=24),
         body_layer=functools.partial(layers.ResConvBlock1D, filters=24),
         head_layer=functools.partial(
-            layers.AdditiveMix, mix_coeff_layer=layers.MixCoeffMLP, use_maximum_target_control_logprob=True
+            layers.TargetControlMix, mix_coeff_layer=layers.PooledProbMixCoeff, use_maximum_target_control_logprob=True
         ),
     )
     model.eval()
